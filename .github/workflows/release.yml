@@ -8,9 +8,15 @@ on:
     tags:
       - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
 
+# Add permissions for the GitHub token
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   release:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
 
     strategy:
       matrix:
@@ -19,6 +25,8 @@ jobs:
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for all branches and tags
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -35,7 +43,9 @@ jobs:
       - name: Build/Release Electron app
         uses: samuelmeuli/action-electron-builder@v1
         with:
-          github_token: ${{ secrets.github_token }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           release: ${{ github.event_name == 'push' && github.event.tag_name != '' }}
           build_script_name: ${{ matrix.os == 'macos-latest' && 'build:mac' || matrix.os == 'windows-latest' && 'build:win' || 'build:linux' }}
           skip_build: false
+          max_attempts: 3
+          args: --config.compression=store
