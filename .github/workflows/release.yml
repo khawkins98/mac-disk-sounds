@@ -1,0 +1,37 @@
+name: Release
+on:
+  push:
+    branches:
+      - '*'
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.x
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install dmg-license (macOS only)
+        if: matrix.os == 'macos-latest'
+        run: npm install dmg-license --save-dev
+
+      - name: Build/Release Electron app
+        uses: samuelmeuli/action-electron-builder@v1
+        with:
+          github_token: ${{ secrets.github_token }}
+          release: ${{ github.event_name == 'push' && github.event.tag_name != '' }}
+          build_script_name: ${{ matrix.os == 'macos-latest' && 'build:mac' || matrix.os == 'windows-latest' && 'build:win' || 'build:linux' }}
+          skip_build: false
