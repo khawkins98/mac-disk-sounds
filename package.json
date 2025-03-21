@@ -1,20 +1,58 @@
 {
   "name": "mac-disk-sounds",
   "version": "1.0.0",
-  "description": "Retro HDD sound effects for Mac disk activity",
+  "description": "Retro HDD sound effects for disk activity",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder -mwl",
+    "build:mac": "electron-builder -m",
+    "build:win": "electron-builder -w",
+    "build:linux": "electron-builder -l",
+    "release": "electron-builder -mwl -p always"
   },
   "build": {
     "appId": "com.macdisksounds.app",
+    "productName": "Mac Disk Sounds",
+    "publish": {
+      "provider": "github",
+      "owner": "khawkins98",
+      "repo": "mac-disk-sounds",
+      "releaseType": "release"
+    },
     "mac": {
       "category": "public.app-category.utilities",
-      "icon": "icon.icns"
+      "icon": "icon.icns",
+      "target": ["dmg", "zip"]
+    },
+    "win": {
+      "icon": "icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "linux": {
+      "icon": "icon.png",
+      "target": ["AppImage", "deb", "rpm"],
+      "category": "Utility",
+      "maintainer": "Mac Disk Sounds Team",
+      "description": "Bring back the nostalgic sounds of vintage hard drives"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     }
   },
-  "keywords": ["electron", "mac", "disk", "sounds", "retro"],
+  "keywords": ["electron", "mac", "windows", "linux", "disk", "sounds", "retro"],
   "author": "",
   "license": "MIT",
   "devDependencies": {
