@@ -11,17 +11,26 @@ const diskPaths = ['/'];  // Add more paths if needed
 let watchers = []; // Keep track of file watchers
 
 function createWindow() {
+  // https://www.electronjs.org/docs/latest/tutorial/custom-window-styles#limitations
   mainWindow = new BrowserWindow({
     width: 400,
     height: 600,
+    frame: false,
+    transparent: true,
+
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
       webSecurity: false
     },
-    resizable: false,
-    titleBarStyle: 'hidden'
+    // resizable: false,
+    // titleBarStyle: 'hidden',
+    // titleBarOverlay: {
+    //   height: 900
+    // }
+
   });
+
 
   // Enable loading of ES modules
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
