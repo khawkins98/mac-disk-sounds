@@ -7,23 +7,29 @@ import fs from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-let mainWindow;
+let mainWindow = null;
 const diskPaths = ['/'];  // Add more paths if needed
 let watchers = []; // Keep track of file watchers
 
-function createWindow() {
+async function createWindow() {
+  // Garbage collect before creating window
+  if (global.gc) global.gc();
+
   // https://www.electronjs.org/docs/latest/tutorial/custom-window-styles#limitations
   mainWindow = new BrowserWindow({
     width: 400,
     height: 320,
     frame: false,
-    // resizable: false,
     transparent: true,
     backgroundColor: '#ffffff',
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      webSecurity: false
+      webSecurity: false,
+      // Reduce memory usage
+      enableWebSQL: false,
+      spellcheck: false,
+      backgroundThrottling: true
     },
     icon: path.join(__dirname, 'icon', 'hdd-icon.jpg')
   });
@@ -38,7 +44,10 @@ function createWindow() {
     });
   });
 
-  mainWindow.loadFile('index.html');
+  await mainWindow.loadFile('index.html');
+
+  // Optimize memory usage
+  mainWindow.webContents.setBackgroundThrottling(true);
 
   // Clean up watchers when window is closed
   mainWindow.on('closed', () => {
@@ -61,21 +70,19 @@ function cleanupWatchers() {
 
 // Handle window control messages
 ipcMain.on('window-control', (event, command) => {
-  console.log('Received window control command:', command);
+  if (!mainWindow) return;
+
   switch (command) {
     case 'close':
-      console.log('Closing window...');
       mainWindow.close();
       break;
     case 'minimize':
-      console.log('Minimizing window...');
       mainWindow.minimize();
       break;
-    default:
-      console.warn('Unknown window control command:', command);
   }
 });
 
+// Optimize app lifecycle
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
@@ -86,7 +93,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
+  if (!mainWindow) {
     createWindow();
   }
 });
@@ -95,7 +102,7 @@ app.on('before-quit', () => {
   cleanupWatchers();
 });
 
-// Watch disk activity
+// Watch disk activity with optimized debouncing
 let lastActivity = Date.now();
 const DEBOUNCE_TIME = 50; // ms
 
