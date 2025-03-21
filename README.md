@@ -17,6 +17,14 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 - 🎮 Hidden surprises for the curious (hint: some dots like to be clicked...)
 - 🪟 Cross-platform: Works on macOS, Windows, and Linux!
 
+## Seriously, Why? 🤷‍♂️
+
+This project started as an experiment in two ways:
+
+1. **Testing Cursor AI**: I was curious to see how helpful Cursor's AI assistant would be in building a complete application from scratch. The results were impressive - though I still needed to dive in with some key debugging, helping with image and sound files and guiding it towards things like [sakun/system.css](https://github.com/sakofchit/system.css).
+
+2. **Missing Audio Feedback**: After switching to a fanless MacBook, I found myself missing the audio feedback that tells you when your computer is working hard. Modern computers are so quiet that you can't tell when they're under load.
+
 ## Installation 🚀
 
 ### macOS
