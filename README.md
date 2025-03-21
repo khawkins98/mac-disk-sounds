@@ -20,14 +20,6 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 - 🪟 Cross-platform: Works on macOS, Windows, and Linux!
 - 🏋️ Dozens or hundreds of MBs to download and make your SSD workout! Thanks Electron!
 
-## Seriously, Why? 🤷‍♂️
-
-This project started as an experiment in two ways:
-
-1. **Testing Cursor AI**: I was curious to see how helpful Cursor's AI assistant would be in building a complete application from scratch. The results were impressive - though I still needed to dive in with some key debugging, helping with image and sound files and guiding it towards things like [sakun/system.css](https://github.com/sakofchit/system.css).
-
-2. **Missing Audio Feedback**: After switching to a fanless MacBook, I found myself missing the audio feedback that tells you when your computer is working hard. Modern computers are so quiet that you can't tell when they're under load.
-
 ## Installation 🚀
 
 ### macOS
@@ -40,15 +32,8 @@ This project started as an experiment in two ways:
 
 If you see a message saying the app "is damaged and can't be opened" this is because I don't have the $99 annual developer license from Apple, you workaround this by:
 
-1. **Method 1: First-time Opening**
-   - Right-click (or Control-click) the app in Finder
-   - Select "Open" from the context menu
-   - Click "Open" in the dialog that appears
-   - The app will now be saved as an exception in your security settings
-
-2. **Method 2: Terminal Command**
    ```bash
-   xattr -cr "/Applications/Mac Disk Sounds.app"
+   xattr -cr "~/Downloads/Mac Disk Sounds.app"
    ```
    Then try opening the app normally.
 
@@ -117,6 +102,14 @@ Why not? Sometimes the best projects are the ones that make you smile. Plus, it'
 - Add some character to your silent machine
 - Practice your "let me explain why my computer is making these sounds" speech
 - Time travel back to the days of dial-up (maybe? 🤫)
+
+## Seriously, Why? 🤷‍♂️
+
+This project started as an experiment in two ways:
+
+1. **Testing Cursor AI**: I was curious to see how helpful Cursor's AI assistant would be in building a complete application from scratch. The results were impressive - though I still needed to dive in with some key debugging, helping with image and sound files and guiding it towards things like [sakun/system.css](https://github.com/sakofchit/system.css).
+
+2. **Missing Audio Feedback**: After switching to a fanless MacBook, I found myself missing the audio feedback that tells you when your computer is working hard. Modern computers are so quiet that you can't tell when they're under load.
 
 ## Credits 🙏
 
