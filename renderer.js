@@ -1,6 +1,15 @@
 const { ipcRenderer, shell } = require('electron');
 const { Howl, Howler } = require('howler');
 
+// Window controls
+document.querySelector('button[aria-label="Close"]').addEventListener('click', () => {
+  ipcRenderer.send('window-control', 'close');
+});
+
+document.querySelector('button[aria-label="Resize"]').addEventListener('click', () => {
+  ipcRenderer.send('window-control', 'minimize');
+});
+
 // Handle external links
 document.addEventListener('click', (event) => {
   if (event.target.tagName === 'A' && event.target.href.startsWith('http')) {

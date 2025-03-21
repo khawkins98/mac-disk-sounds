@@ -14,23 +14,18 @@ function createWindow() {
   // https://www.electronjs.org/docs/latest/tutorial/custom-window-styles#limitations
   mainWindow = new BrowserWindow({
     width: 400,
-    height: 600,
+    height: 320,
     frame: false,
+    // resizable: false,
     transparent: true,
-
+    backgroundColor: '#ffffff',
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
       webSecurity: false
     },
-    // resizable: false,
-    // titleBarStyle: 'hidden',
-    // titleBarOverlay: {
-    //   height: 900
-    // }
 
   });
-
 
   // Enable loading of ES modules
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
@@ -62,6 +57,23 @@ function cleanupWatchers() {
   });
   watchers = [];
 }
+
+// Handle window control messages
+ipcMain.on('window-control', (event, command) => {
+  console.log('Received window control command:', command);
+  switch (command) {
+    case 'close':
+      console.log('Closing window...');
+      mainWindow.close();
+      break;
+    case 'minimize':
+      console.log('Minimizing window...');
+      mainWindow.minimize();
+      break;
+    default:
+      console.warn('Unknown window control command:', command);
+  }
+});
 
 app.whenReady().then(createWindow);
 
