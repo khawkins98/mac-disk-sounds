@@ -40,6 +40,13 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: npm install dmg-license --save-dev
 
+      - name: Clean up existing release assets
+        if: github.event_name == 'push' && github.event.tag_name != ''
+        run: |
+          gh release delete-asset ${{ github.event.tag_name }} -y || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build/Release Electron app
         uses: samuelmeuli/action-electron-builder@v1
         with:
