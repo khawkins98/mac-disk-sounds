@@ -25,10 +25,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install dmg-license (macOS only)
+        if: matrix.os == 'macos-latest'
+        run: npm install dmg-license --save-dev
+
       - name: Build/Release Electron app
         uses: samuelmeuli/action-electron-builder@v1
         with:
           github_token: ${{ secrets.github_token }}
           release: ${{ github.event_name == 'push' && github.event.tag_name != '' }}
           build_script_name: build
-          skip_build: false 
+          skip_build: false
