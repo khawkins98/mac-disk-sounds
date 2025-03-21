@@ -35,6 +35,21 @@ This project started as an experiment in two ways:
 2. Drag the app to your Applications folder
 3. Open it and enjoy the sweet sounds of yesteryear!
 
+#### Note for macOS Users
+If you see a message saying the app "is damaged and can't be opened", you can fix this by:
+
+1. **Method 1: First-time Opening**
+   - Right-click (or Control-click) the app in Finder
+   - Select "Open" from the context menu
+   - Click "Open" in the dialog that appears
+   - The app will now be saved as an exception in your security settings
+
+2. **Method 2: Terminal Command**
+   ```bash
+   xattr -cr "/Applications/Mac Disk Sounds.app"
+   ```
+   Then try opening the app normally.
+
 ### Windows
 
 1. Download the latest Windows installer (`.exe`) from the releases page
