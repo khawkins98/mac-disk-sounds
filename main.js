@@ -24,6 +24,7 @@ function createWindow() {
       contextIsolation: false,
       webSecurity: false
     },
+    icon: '/icon/hdd-icon.jpg'
 
   });
 

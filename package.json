@@ -10,7 +10,8 @@
   "build": {
     "appId": "com.macdisksounds.app",
     "mac": {
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "icon": "icon.icns"
     }
   },
   "keywords": ["electron", "mac", "disk", "sounds", "retro"],

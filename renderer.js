@@ -20,7 +20,7 @@ document.addEventListener('click', (event) => {
 
 // Background loop sound configuration
 const backgroundSound = new Howl({
-  src: ['sounds/hard-disk-drive-ibm-1999-48823 2.mp3'],
+  src: ['sounds/hard-disk-drive-ibm-1999-48823.mp3'],
   volume: 0,
   sprite: {
     loop: [110000, 130000], // 1:50 to 2:10 (in milliseconds)
@@ -35,7 +35,7 @@ const backgroundSound = new Howl({
 
 // Startup sound configuration
 const startupSound = new Howl({
-  src: ['sounds/hard-disk-drive-ibm-1999-48823 2.mp3'],
+  src: ['sounds/hard-disk-drive-ibm-1999-48823.mp3'],
   volume: 0,
   sprite: {
     startup: [2000, 11000] // 9 second clip starting after the 2s trim
@@ -72,7 +72,7 @@ function createSpriteRanges(duration, segmentLength, count, trimStart = 0) {
 const soundSets = {
   ibm: {
     read: new Howl({
-      src: ['sounds/hard-disk-drive-ibm-1999-48823 2.mp3'],
+      src: ['sounds/hard-disk-drive-ibm-1999-48823.mp3'],
       volume: 0,  // Start at 0 volume for fading
       sprite: createSpriteRanges(100000, 300, 8, 2000), // Skip first 2 seconds, 300ms segments
       onload: () => {
@@ -88,7 +88,7 @@ const soundSets = {
   },
   generic: {
     read: new Howl({
-      src: ['sounds/computer-hard-drive-access-fan-click-62422 2.mp3'],
+      src: ['sounds/computer-hard-drive-access-fan-click-62422.mp3'],
       volume: 0,  // Start at 0 volume for fading
       sprite: createSpriteRanges(40000, 300, 8, 1000), // Skip first second, X00ms segments
       onload: () => {
@@ -209,5 +209,63 @@ ipcRenderer.on('disk-activity', () => {
     setTimeout(() => {
       isPlaying = false;
     }, duration);
+  }
+});
+
+let clickCount = 0;
+let clickTimer = null;
+
+activityIndicator.addEventListener('click', () => {
+  clickCount++;
+
+  console.log('🎮 Activity indicator clicked:', clickCount, 'times');
+
+  // Reset click count after 1 second of no clicks
+  clearTimeout(clickTimer);
+  clickTimer = setTimeout(() => {
+    clickCount = 0;
+  }, 1000);
+
+  // Easter egg: After 3 quick clicks
+  if (clickCount === 3) {
+    clickCount = 0;
+    clearTimeout(clickTimer);
+
+    console.log('🎵 Easter egg activated: Dialing into the 90s...');
+    // Play the dial-up modem sound
+    const modemSound = new Howl({
+      src: ['sounds/the-sound-of-dial-up-internet-6240.mp3'],
+      volume: volumeSlider.value / 100,
+      preload: true,
+      html5: true,
+      onload: () => {
+        console.log('Modem sound loaded');
+      },
+      onloaderror: (id, error) => {
+        console.error('Error loading modem sound:', error);
+        // Show error in UI or fallback behavior
+        activityIndicator.style.backgroundColor = 'red';
+        setTimeout(() => {
+          activityIndicator.style.backgroundColor = '';
+        }, 1000);
+      },
+      onend: () => {
+        console.log('📞 Modem connection terminated');
+      }
+    });
+
+    // Flash the activity indicator rapidly
+    let flashCount = 0;
+    const flashInterval = setInterval(() => {
+      activityIndicator.style.backgroundColor = flashCount % 2 ? '#32CD32' : '#333';
+      flashCount++;
+      if (flashCount > 10) {
+        clearInterval(flashInterval);
+        activityIndicator.style.backgroundColor = '#333';
+        console.log('✨ Welcome to the information superhighway!');
+      }
+    }, 100);
+
+    modemSound.play();
   }
 });
