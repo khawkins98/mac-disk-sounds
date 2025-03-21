@@ -39,7 +39,7 @@
       ]
     },
     "linux": {
-      "icon": "icon.png",
+      "icon": "icon.iconset/icon_256x256.png",
       "target": ["AppImage", "deb", "rpm"],
       "category": "Utility",
       "maintainer": "Mac Disk Sounds Team",
