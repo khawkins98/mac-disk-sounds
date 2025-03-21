@@ -1,8 +1,9 @@
 {
   "name": "mac-disk-sounds",
-  "version": "1.0.0",
+  "version": "1.0.1-alpha.1",
   "description": "Retro HDD sound effects for disk activity",
   "main": "main.js",
+  "type": "module",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder -mwl",

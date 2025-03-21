@@ -4,7 +4,6 @@ _Because your modern computer deserves to sound like it's from 1999_
 
 [![Download Now](https://img.shields.io/github/v/release/khawkins98/mac-disk-sounds?label=Download%20Now&style=for-the-badge)](https://github.com/khawkins98/mac-disk-sounds/releases)
 
-
 ## What is this madness? 🤔
 
 Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your fancy SSD is just too... quiet? Well, you're in luck! Mac Disk Sounds brings back that nostalgic whirring, clicking, and seeking of vintage hard drives to your modern computer.

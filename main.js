@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 
+// ES Module path resolution
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -24,8 +25,7 @@ function createWindow() {
       contextIsolation: false,
       webSecurity: false
     },
-    icon: '/icon/hdd-icon.jpg'
-
+    icon: path.join(__dirname, 'icon', 'hdd-icon.jpg')
   });
 
   // Enable loading of ES modules
@@ -99,9 +99,9 @@ app.on('before-quit', () => {
 let lastActivity = Date.now();
 const DEBOUNCE_TIME = 50; // ms
 
-diskPaths.forEach(path => {
+diskPaths.forEach(diskPath => {
   try {
-    const watcher = fs.watch(path, { recursive: true }, (eventType, filename) => {
+    const watcher = fs.watch(diskPath, { recursive: true }, (eventType, filename) => {
       const now = Date.now();
       if (now - lastActivity > DEBOUNCE_TIME && mainWindow) {
         lastActivity = now;
@@ -110,6 +110,6 @@ diskPaths.forEach(path => {
     });
     watchers.push(watcher);
   } catch (err) {
-    console.error(`Error watching path ${path}:`, err);
+    console.error(`Error watching path ${diskPath}:`, err);
   }
 });
