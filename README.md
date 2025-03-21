@@ -36,7 +36,8 @@ This project started as an experiment in two ways:
 3. Open it and enjoy the sweet sounds of yesteryear!
 
 #### Note for macOS Users
-If you see a message saying the app "is damaged and can't be opened", you can fix this by:
+
+If you see a message saying the app "is damaged and can't be opened" this is because I don't have the $99 annual developer license from Apple, you workaround this by:
 
 1. **Method 1: First-time Opening**
    - Right-click (or Control-click) the app in Finder
