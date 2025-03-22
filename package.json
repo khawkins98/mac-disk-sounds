@@ -1,6 +1,6 @@
 {
   "name": "mac-disk-sounds",
-  "version": "1.0.1-alpha.2",
+  "version": "1.0.1-alpha.3",
   "description": "Retro HDD sound effects for disk activity",
   "main": "main.js",
   "type": "module",
@@ -37,28 +37,41 @@
     ],
     "compression": "maximum",
     "asar": true,
-    "asarUnpack": ["sounds/*"],
+    "asarUnpack": [
+      "sounds/*"
+    ],
     "mac": {
       "category": "public.app-category.utilities",
       "icon": "icon.icns",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "win": {
       "icon": "icon.ico",
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
     "linux": {
       "icon": "icon.iconset/icon_256x256.png",
-      "target": ["AppImage", "deb", "rpm"],
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
       "category": "Utility",
       "maintainer": "Mac Disk Sounds Team",
       "description": "Bring back the nostalgic sounds of vintage hard drives"
@@ -74,7 +87,15 @@
       "output": "dist"
     }
   },
-  "keywords": ["electron", "mac", "windows", "linux", "disk", "sounds", "retro"],
+  "keywords": [
+    "electron",
+    "mac",
+    "windows",
+    "linux",
+    "disk",
+    "sounds",
+    "retro"
+  ],
   "author": "",
   "license": "MIT",
   "devDependencies": {
@@ -83,6 +104,7 @@
   },
   "dependencies": {
     "fs-extra": "^11.1.1",
-    "howler": "^2.2.4"
+    "howler": "^2.2.4",
+    "systeminformation": "^5.25.11"
   }
 }

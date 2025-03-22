@@ -2,14 +2,29 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import si from 'systeminformation';
 
 // ES Module path resolution
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow = null;
-const diskPaths = ['/'];  // Add more paths if needed
-let watchers = []; // Keep track of file watchers
+let diskMonitorInterval = null;
+
+async function monitorDiskIO() {
+  try {
+    const fsStats = await si.fsStats();
+    if (mainWindow) {
+      // Send both read and write speeds
+      mainWindow.webContents.send('disk-activity', {
+        type: fsStats.rx_sec > fsStats.wx_sec ? 'read' : 'write',
+        speed: Math.max(fsStats.rx_sec, fsStats.wx_sec)
+      });
+    }
+  } catch (error) {
+    console.error('Error monitoring disk I/O:', error);
+  }
+}
 
 async function createWindow() {
   // Garbage collect before creating window
@@ -18,7 +33,7 @@ async function createWindow() {
   // https://www.electronjs.org/docs/latest/tutorial/custom-window-styles#limitations
   mainWindow = new BrowserWindow({
     width: 400,
-    height: 320,
+    height: 280,
     frame: false,
     transparent: true,
     backgroundColor: '#ffffff',
@@ -46,26 +61,29 @@ async function createWindow() {
 
   await mainWindow.loadFile('index.html');
 
+  // Start disk I/O monitoring
+  diskMonitorInterval = setInterval(monitorDiskIO, 1000); // Check every second
+
+  // Handle window focus events
+  mainWindow.on('focus', () => {
+    mainWindow.webContents.send('window-focus-change', true);
+  });
+
+  mainWindow.on('blur', () => {
+    mainWindow.webContents.send('window-focus-change', false);
+  });
+
   // Optimize memory usage
   mainWindow.webContents.setBackgroundThrottling(true);
 
-  // Clean up watchers when window is closed
+  // Clean up when window is closed
   mainWindow.on('closed', () => {
-    cleanupWatchers();
+    if (diskMonitorInterval) {
+      clearInterval(diskMonitorInterval);
+      diskMonitorInterval = null;
+    }
     mainWindow = null;
   });
-}
-
-// Function to clean up file watchers
-function cleanupWatchers() {
-  watchers.forEach(watcher => {
-    try {
-      watcher.close();
-    } catch (err) {
-      console.error('Error closing watcher:', err);
-    }
-  });
-  watchers = [];
 }
 
 // Handle window control messages
@@ -74,6 +92,10 @@ ipcMain.on('window-control', (event, command) => {
 
   switch (command) {
     case 'close':
+      if (diskMonitorInterval) {
+        clearInterval(diskMonitorInterval);
+        diskMonitorInterval = null;
+      }
       mainWindow.close();
       break;
     case 'minimize':
@@ -86,7 +108,10 @@ ipcMain.on('window-control', (event, command) => {
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
-  cleanupWatchers();
+  if (diskMonitorInterval) {
+    clearInterval(diskMonitorInterval);
+    diskMonitorInterval = null;
+  }
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -99,24 +124,8 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
-  cleanupWatchers();
-});
-
-// Watch disk activity with optimized debouncing
-let lastActivity = Date.now();
-const DEBOUNCE_TIME = 50; // ms
-
-diskPaths.forEach(diskPath => {
-  try {
-    const watcher = fs.watch(diskPath, { recursive: true }, (eventType, filename) => {
-      const now = Date.now();
-      if (now - lastActivity > DEBOUNCE_TIME && mainWindow) {
-        lastActivity = now;
-        mainWindow.webContents.send('disk-activity');
-      }
-    });
-    watchers.push(watcher);
-  } catch (err) {
-    console.error(`Error watching path ${diskPath}:`, err);
+  if (diskMonitorInterval) {
+    clearInterval(diskMonitorInterval);
+    diskMonitorInterval = null;
   }
 });

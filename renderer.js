@@ -1,6 +1,18 @@
 const { ipcRenderer, shell } = require('electron');
 const { Howl, Howler } = require('howler');
 
+// Window focus handling
+const mainWindow = document.getElementById('main-window');
+
+// Listen for window focus/blur events
+ipcRenderer.on('window-focus-change', (event, isFocused) => {
+  if (isFocused) {
+    mainWindow.classList.remove('inactive');
+  } else {
+    mainWindow.classList.add('inactive');
+  }
+});
+
 // Window controls
 document.querySelector('button[aria-label="Close"]').addEventListener('click', () => {
   ipcRenderer.send('window-control', 'close');
@@ -38,7 +50,7 @@ const startupSound = new Howl({
   src: ['sounds/hard-disk-drive-ibm-1999-48823.mp3'],
   volume: 0,
   sprite: {
-    startup: [2000, 11000] // 9 second clip starting after the 2s trim
+    startup: [3000, 11000] // 9 second clip starting after the 2s trim
   },
   onload: () => {
     console.log('Startup sound loaded');
@@ -110,27 +122,29 @@ const volumeValue = document.getElementById('volume-value');
 const backgroundVolumeSlider = document.getElementById('background-volume');
 const backgroundVolumeValue = document.getElementById('background-volume-value');
 const soundSetSelect = document.getElementById('sound-set');
-const activityIndicator = document.getElementById('activity-indicator');
-const testButton = document.getElementById('test-sound');
+const activityIndicators = Array.from({ length: 5 }, (_, i) => document.getElementById(`activity-indicator-${i + 1}`));
+const diskSpeed = document.getElementById('disk-speed');
 
 // Current sound set
-let currentSoundSet = 'ibm';
+let currentSoundSet = 'generic';
 let currentSoundId = null;
 let baseVolume = 0.5; // Store base volume level
 let backgroundBaseVolume = 0.2; // Store background volume level
 
 // Update volume display and all sound volumes
 volumeSlider.addEventListener('input', (e) => {
-  const volume = e.target.value;
-  volumeValue.textContent = volume;
-  baseVolume = volume / 100;
+  const volumeLevel = parseInt(e.target.value);
+  volumeValue.textContent = volumeLevel;
+  // Convert 0-7 scale to 0-1 for Howler
+  baseVolume = volumeLevel / 7;
 });
 
 // Update background volume
 backgroundVolumeSlider.addEventListener('input', (e) => {
-  const volume = e.target.value;
-  backgroundVolumeValue.textContent = volume;
-  backgroundBaseVolume = volume / 100;
+  const volumeLevel = parseInt(e.target.value);
+  backgroundVolumeValue.textContent = volumeLevel;
+  // Convert 0-7 scale to 0-1 for Howler
+  backgroundBaseVolume = volumeLevel / 7;
   backgroundSound.volume(backgroundBaseVolume);
 });
 
@@ -146,6 +160,23 @@ soundSetSelect.addEventListener('change', (e) => {
     });
   });
 });
+
+// Function to update activity indicators based on disk activity level
+const updateActivityIndicators = (level) => {
+  // level should be between 0 and 1
+  const dotsToLight = Math.ceil(level * 5);
+  console.log('Dots to light:', dotsToLight, level);
+  activityIndicators.forEach((indicator, index) => {
+    if (index < dotsToLight) {
+      indicator.classList.add('active');
+    } else {
+      // Add small delay before removing active class
+      setTimeout(() => {
+        indicator.classList.remove('active');
+      }, 100); // 100ms delay
+    }
+  });
+};
 
 // Function to play sound and show indicator
 const playSound = () => {
@@ -173,8 +204,9 @@ const playSound = () => {
 
   console.log('Sound playback triggered:', randomSprite);
 
-  // Show activity indicator
-  activityIndicator.classList.add('active');
+  // Show random activity level
+  const activityLevel = Math.random() * 0.6 + 0.4; // Random level between 0.4 and 1.0
+  updateActivityIndicators(activityLevel);
 
   // Get the duration from the sprite configuration
   const duration = sound._sprite[randomSprite][1] - sound._sprite[randomSprite][0];
@@ -185,29 +217,63 @@ const playSound = () => {
     }
   }, duration - 10);
 
-  // Reset indicator and cleanup
+  // Reset indicators and cleanup
   setTimeout(() => {
-    activityIndicator.classList.remove('active');
+    updateActivityIndicators(0);
     currentSoundId = null;
   }, duration);
 };
 
 // Handle test button click
-testButton.addEventListener('click', () => {
-  console.log('Test button clicked');
-  playSound();
-});
+// testButton.addEventListener('click', () => {
+//   console.log('Test button clicked');
+//   playSound();
+// });
+
+// Function to format bytes to human readable
+const formatBytes = (bytes) => {
+  if (bytes === 0) return '0 B/s';
+  const k = 1024;
+  const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+};
 
 // Handle disk activity
 let isPlaying = false;
-ipcRenderer.on('disk-activity', () => {
-  console.log('Disk activity detected');
+ipcRenderer.on('disk-activity', (event, data) => {
+  console.log('Disk activity detected:', data, event);
+  // Default to read operation if type not specified
+  const type = data?.type || 'read';
+  // Default to a moderate speed if not specified
+  const speed = data?.speed || 11; // 512KB/s default
+
+  console.log('Disk activity detected:', type, speed);
+
+  // Update speed display
+  const speedText = formatBytes(speed);
+  diskSpeed.textContent = `${type === 'read' ? 'write' : 'read'} ${speedText}`;
+
   if (!isPlaying) {
     isPlaying = true;
     playSound();
-    const duration = currentSoundSet === 'ibm' ? 300 : 200;
+
+    // Calculate activity level based on speed
+    // Assuming typical SSD speeds max around 2GB/s
+    const maxSpeed = .1 * 1024 * 1024 * 1024; // 100MB/s in bytes
+    const activityLevel = Math.min(speed / maxSpeed + 0.2, 1);
+    updateActivityIndicators(activityLevel);
+
+    const duration = currentSoundSet === 'generic' ? 300 : 200;
     setTimeout(() => {
       isPlaying = false;
+      // Don't clear the speed display immediately
+      setTimeout(() => {
+        if (!isPlaying) {
+          diskSpeed.textContent = '';
+          updateActivityIndicators(0);
+        }
+      }, 1000);
     }, duration);
   }
 });
@@ -215,57 +281,93 @@ ipcRenderer.on('disk-activity', () => {
 let clickCount = 0;
 let clickTimer = null;
 
-activityIndicator.addEventListener('click', () => {
-  clickCount++;
+// Update click handler for all indicators
+activityIndicators.forEach(indicator => {
+  indicator.addEventListener('click', () => {
+    clickCount++;
 
-  console.log('🎮 Activity indicator clicked:', clickCount, 'times');
+    console.log('🎮 Activity indicator clicked:', clickCount, 'times');
 
-  // Reset click count after 1 second of no clicks
-  clearTimeout(clickTimer);
-  clickTimer = setTimeout(() => {
-    clickCount = 0;
-  }, 1000);
-
-  // Easter egg: After 3 quick clicks
-  if (clickCount === 3) {
-    clickCount = 0;
+    // Reset click count after 1 second of no clicks
     clearTimeout(clickTimer);
+    clickTimer = setTimeout(() => {
+      clickCount = 0;
+    }, 1000);
 
-    console.log('🎵 Easter egg activated: Dialing into the 90s...');
-    // Play the dial-up modem sound
-    const modemSound = new Howl({
-      src: ['sounds/the-sound-of-dial-up-internet-6240.mp3'],
-      volume: volumeSlider.value / 100,
-      preload: true,
-      html5: true,
-      onload: () => {
-        console.log('Modem sound loaded');
-      },
-      onloaderror: (id, error) => {
-        console.error('Error loading modem sound:', error);
-        // Show error in UI or fallback behavior
-        activityIndicator.style.backgroundColor = 'red';
-        setTimeout(() => {
-          activityIndicator.style.backgroundColor = '';
-        }, 1000);
-      },
-      onend: () => {
-        console.log('📞 Modem connection terminated');
+    // Easter egg: After 3 quick clicks
+    if (clickCount === 3) {
+      clickCount = 0;
+      clearTimeout(clickTimer);
+
+      console.log('🎵 Easter egg activated: Dialing into the 90s...');
+      // Play the dial-up modem sound
+      const modemSound = new Howl({
+        src: ['sounds/the-sound-of-dial-up-internet-6240.mp3'],
+        volume: volumeSlider.value / 100,
+        preload: true,
+        html5: true,
+        onload: () => {
+          console.log('Modem sound loaded');
+        },
+        onplay: () => {
+          // Start the dialup animation
+          const animation = animateDialup();
+
+          // Stop the animation when the sound ends
+          modemSound.once('end', () => {
+            clearInterval(animation);
+            // Reset all indicators
+            activityIndicators.forEach(ind => {
+              ind.classList.remove('active');
+              ind.style.backgroundColor = '';
+            });
+            console.log('📞 Modem connection terminated');
+          });
+        },
+        onloaderror: (id, error) => {
+          console.error('Error loading modem sound:', error);
+          // Show error in UI
+          activityIndicators.forEach(ind => {
+            ind.style.backgroundColor = 'red';
+            setTimeout(() => {
+              ind.style.backgroundColor = '';
+            }, 1000);
+          });
+        }
+      });
+
+      modemSound.play();
+    }
+  });
+});
+
+// Function to animate lights during dialup
+const animateDialup = () => {
+  const patterns = [
+    [1,0,0,0,0], // Initial connection
+    [1,1,0,0,0], // Handshake start
+    [1,1,1,0,0], // Negotiating
+    [0,1,1,1,0], // Synchronizing
+    [0,0,1,1,1], // Almost there
+    [1,0,1,0,1], // Final handshake
+    [1,1,1,1,1], // Connected!
+  ];
+
+  let patternIndex = 0;
+  const dialupAnimation = setInterval(() => {
+    // Update indicators based on current pattern
+    activityIndicators.forEach((indicator, i) => {
+      if (patterns[patternIndex][i]) {
+        indicator.classList.add('active');
+        indicator.style.backgroundColor = '#32CD32';
+      } else {
+        indicator.classList.remove('active');
+        indicator.style.backgroundColor = '';
       }
     });
 
-    // Flash the activity indicator rapidly
-    let flashCount = 0;
-    const flashInterval = setInterval(() => {
-      activityIndicator.style.backgroundColor = flashCount % 2 ? '#32CD32' : '#333';
-      flashCount++;
-      if (flashCount > 10) {
-        clearInterval(flashInterval);
-        activityIndicator.style.backgroundColor = '#333';
-        console.log('✨ Welcome to the information superhighway!');
-      }
-    }, 100);
+    patternIndex = (patternIndex + 1) % patterns.length;
+  }, 800); // Change pattern every 800ms to match typical dialup timing
 
-    modemSound.play();
-  }
-});
+  return dialupAnimation;
+};
