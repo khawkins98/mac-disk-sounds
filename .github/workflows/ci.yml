@@ -75,3 +75,34 @@ jobs:
       # The monitor has no dependencies, so there is nothing to install.
       - name: Disk monitor smoke test
         run: node scripts/smoke-monitor.mjs
+
+  # The release builds one universal (x64 + arm64) macOS app. Merging the two
+  # architectures needs lipo, which only exists on macOS, so build the same
+  # targets here, without publishing, and check the result has both.
+  package-mac:
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v7
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Package (macOS dmg and zip, universal)
+        run: npx electron-builder --mac --publish never
+
+      - name: Check the app is universal
+        run: |
+          set -euo pipefail
+          archs=$(lipo -archs "dist/mac-universal/Mac Disk Sounds.app/Contents/MacOS/Mac Disk Sounds")
+          echo "Architectures: $archs"
+          [[ " $archs " == *" x86_64 "* && " $archs " == *" arm64 "* ]]
+          ls -l dist/*.dmg dist/*.zip

@@ -27,7 +27,7 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 
 ### macOS
 
-1. Download the latest `.dmg` from the releases page
+1. Download the latest `.dmg` from the releases page (or the `-mac.zip`, which holds the same app). There is one download for every Mac: it is a universal app that runs natively on both Apple silicon and Intel Macs.
 2. Drag the app to your Applications folder
 3. Open it and enjoy the sweet sounds of yesteryear!
 
