@@ -15,6 +15,7 @@ import { ActivityModel } from './activity.js';
 import { SettingsStore, sanitizePatch } from './settings.js';
 import { HIDDEN_ARG, createLoginItem, wasOpenedAtLogin } from './login-item.js';
 import { createTray } from './tray.js';
+import { hasStatusNotifierHost, trayFallback } from './tray-host.js';
 
 // ES Module path resolution
 const __filename = fileURLToPath(import.meta.url);
@@ -49,7 +50,11 @@ const EXTERNAL_HOSTS = new Set(['github.com', 'pixabay.com']);
 // opens the latest release in the browser.
 // Not /releases/latest: that skips pre-releases, and every alpha is published as one.
 const RELEASES_URL = 'https://github.com/khawkins98/mac-disk-sounds/releases';
-const WINDOW_COMMANDS = new Set(['close', 'minimize']);
+const WINDOW_COMMANDS = new Set(['close', 'minimize', 'quit']);
+
+// The settings window's size; it is taller when it has to show the
+// "no system tray" note.
+const SETTINGS_SIZE = { width: 400, height: 390, noTrayExtra: 36 };
 
 // Settings the tray menu shows.
 const TRAY_KEYS = ['enabled', 'soundSet', 'launchAtLogin'];
@@ -70,6 +75,9 @@ let readyAt = Infinity;
 // settings window.
 let audioStatus = null;
 let modemPlaying = false;
+// No tray icon can be seen (see tray-host.js): the settings window is then
+// the only way in, so closing it minimises it, and it offers Quit.
+let trayMissing = false;
 const activity = new ActivityModel();
 
 const isLive = (win) => Boolean(win && !win.isDestroyed());
@@ -280,8 +288,8 @@ function createAudioWindow() {
 function createSettingsWindow() {
   // https://www.electronjs.org/docs/latest/tutorial/custom-window-styles#limitations
   const win = new BrowserWindow({
-    width: 400,
-    height: 390,
+    width: SETTINGS_SIZE.width,
+    height: SETTINGS_SIZE.height + (trayMissing ? SETTINGS_SIZE.noTrayExtra : 0),
     show: false,
     frame: false,
     resizable: false,
@@ -300,6 +308,7 @@ function createSettingsWindow() {
     sendTo(win, 'activity', activity.state);
     if (audioStatus) sendTo(win, 'audio-status', audioStatus);
     if (modemPlaying) sendTo(win, 'modem', { playing: true });
+    sendTo(win, 'tray-status', { missing: trayMissing });
   };
   win.on('show', catchUp);
   win.on('restore', catchUp);
@@ -318,6 +327,14 @@ function createSettingsWindow() {
   win.webContents.on('render-process-gone', (_event, details) => {
     console.error('Settings window renderer gone:', details.reason);
     if (!win.isDestroyed()) win.destroy();
+  });
+
+  // With no tray to come back from, closing (from the title bar or the
+  // window manager) minimises instead; Quit is in the window.
+  win.on('close', (event) => {
+    if (!trayMissing || quitting) return;
+    event.preventDefault();
+    win.minimize();
   });
 
   win.on('closed', () => {
@@ -411,6 +428,11 @@ function registerIpc() {
 
   onMessage('window-control', ['settings'], (command) => {
     if (!WINDOW_COMMANDS.has(command)) return;
+    // Quit is only offered in the window when there is no tray menu.
+    if (command === 'quit') {
+      if (trayMissing) app.quit();
+      return;
+    }
     // There is no Dock to minimise to on macOS (the Dock icon is hidden),
     // so there the second title bar button closes the window too.
     if (command === 'close' || IS_MAC) {
@@ -455,7 +477,7 @@ if (!app.requestSingleInstanceLock()) {
     if (app.isReady() && !argv.includes(HIDDEN_ARG)) showSettingsWindow();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     // The pages need no permissions (audio output is not one).
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     disableSpellChecker(session.defaultSession);
@@ -505,8 +527,17 @@ if (!app.requestSingleInstanceLock()) {
 
     applyEnabled(store.get().enabled);
 
+    // On Linux the icon only shows if a StatusNotifierItem host is running.
+    // Find out before showing the window, so it can be sized for the note.
+    const hasHost = tray && process.platform === 'linux' ? await hasStatusNotifierHost() : null;
+    trayMissing = trayFallback({ platform: process.platform, trayCreated: tray !== null, hasHost }).trayMissing;
+    if (trayMissing) {
+      console.warn('No system tray to show the icon in: closing the settings window will minimise it.');
+    }
+
     // Started by hand: show the window so it is clear the app is running.
-    // Started at login: stay in the tray.
+    // Started at login: stay in the tray (or, with no tray, out of sight:
+    // starting the app again shows the window).
     if (!wasOpenedAtLogin({ app })) showSettingsWindow();
   });
 

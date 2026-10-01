@@ -73,6 +73,8 @@ Mac Disk Sounds runs from the menu bar (macOS) or the system tray (Windows and L
 
 Clicking the icon opens or closes the settings window (on Linux most trays only show the menu, so use **Open Settings…**). Closing the window keeps the sounds going; only **Quit** stops the app. Starting the app by hand opens the settings window; starting at login does not. Settings are saved as `settings.json` in the app's user data folder. On Linux, Launch at Login writes `~/.config/autostart/mac-disk-sounds.desktop`.
 
+On Linux the tray icon needs a StatusNotifierItem host (KDE, XFCE, Cinnamon, MATE and Ubuntu have one; stock GNOME needs the AppIndicator extension). If the app finds none at startup, the settings window says so and has a **Quit** button, and closing the window minimises it instead, so the app cannot end up running with no way back to it. Started at login with no tray, the app stays out of sight; start it again to show the window.
+
 Power use on macOS: while the disk is busy and the sounds are enabled, the app holds a "prevent app suspension" power assertion so App Nap cannot delay the clicks; it is released as soon as the disk goes quiet or the sounds are turned off. A disk that is only touched now and then (say one small write every few seconds from some background service) counts as quiet: to keep clicking, the disk has to be busy for at least half of the last eight seconds. Separately, like any Chromium-based app, macOS is kept out of idle sleep while sound is actually playing, which includes the ambience. Set the ambience to 0 (or turn the sounds off) if you want your Mac to idle-sleep while the app runs; the display can sleep either way.
 
 ## Building from Source 🛠️

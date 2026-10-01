@@ -37,6 +37,13 @@ document.querySelector('button[aria-label="Resize"]').addEventListener('click', 
   bridge.windowControl('minimize');
 });
 
+// With no tray icon (and so no tray menu) the window says so and offers Quit.
+const noTrayNote = document.getElementById('no-tray');
+document.getElementById('quit').addEventListener('click', () => bridge.windowControl('quit'));
+bridge.onTrayStatus(({ missing }) => {
+  noTrayNote.hidden = !missing;
+});
+
 // External links open in the browser (main checks them against an allowlist).
 document.addEventListener('click', (event) => {
   const link = event.target.closest('a[href]');
