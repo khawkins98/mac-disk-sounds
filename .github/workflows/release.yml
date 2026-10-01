@@ -1,58 +1,91 @@
 name: Release
 
 on:
-  # push:
-  #   branches:
-  #     - '*'
   push:
     tags:
       - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
 
-# Add permissions for the GitHub token
 permissions:
   contents: write
-  packages: write
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_REPO: ${{ github.repository }}
+  TAG: ${{ github.ref_name }}
 
 jobs:
+  # Create one draft release up front so the platform jobs below all upload
+  # to it, instead of racing each other to create it.
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v7
+
+      # electron-builder names the release after package.json's version, not
+      # the pushed tag; a mismatch would otherwise publish nothing and pass.
+      - name: Check tag matches package.json version
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$expected" ]; then
+            echo "::error::Tag $TAG does not match package.json version ($expected)"
+            exit 1
+          fi
+
+      - name: Create draft release
+        run: |
+          if state=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$state" != "true" ]; then
+              echo "::error::Release $TAG is already published; bump the version instead"
+              exit 1
+            fi
+            echo "Reusing existing draft release $TAG"
+          else
+            gh release create "$TAG" --draft --verify-tag --title "$TAG" --generate-notes
+          fi
+
   release:
+    needs: prepare
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: win
 
     steps:
       - name: Check out Git repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Fetch all history for all branches and tags
+        uses: actions/checkout@v7
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 18.x
+          node-version: 24.x
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Install dmg-license (macOS only)
-        if: matrix.os == 'macos-latest'
-        run: npm install dmg-license --save-dev
+      - name: Build and upload to the draft release
+        run: npx electron-builder --${{ matrix.platform }} --publish always
 
-      - name: Clean up existing release assets
-        if: github.event_name == 'push' && github.event.tag_name != ''
+  # Publish only once every platform has uploaded its assets.
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish release
         run: |
-          gh release delete-asset ${{ github.event.tag_name }} -y || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build/Release Electron app
-        uses: samuelmeuli/action-electron-builder@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          release: ${{ github.event_name == 'push' && github.event.tag_name != '' }}
-          build_script_name: ${{ matrix.os == 'macos-latest' && 'build:mac' || matrix.os == 'windows-latest' && 'build:win' || 'build:linux' }}
-          skip_build: false
-          max_attempts: 3
-          args: --config.compression=store
+          if [[ "$TAG" == *-* ]]; then
+            gh release edit "$TAG" --draft=false --prerelease
+          else
+            gh release edit "$TAG" --draft=false --latest
+          fi

@@ -4,12 +4,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Electron build output
+# Electron build output (build/ holds committed build resources)
 dist/
-build/
 
-# macOS system files
+# OS system files
 .DS_Store
+Thumbs.db
 .AppleDouble
 .LSOverride
 

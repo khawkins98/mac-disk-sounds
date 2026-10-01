@@ -30,12 +30,14 @@ document.addEventListener('click', (event) => {
   }
 });
 
+// Howler sprites are [offset, duration] in milliseconds, not [start, end].
+
 // Background loop sound configuration
 const backgroundSound = new Howl({
   src: ['sounds/hard-disk-drive-ibm-1999-48823.mp3'],
   volume: 0,
   sprite: {
-    loop: [110000, 130000], // 1:50 to 2:10 (in milliseconds)
+    loop: [110000, 20000], // 1:50 to 2:10 of a 2:36 file
   },
   loop: true,
   onload: () => {
@@ -50,7 +52,7 @@ const startupSound = new Howl({
   src: ['sounds/hard-disk-drive-ibm-1999-48823.mp3'],
   volume: 0,
   sprite: {
-    startup: [3000, 11000] // 9 second clip starting after the 2s trim
+    startup: [3000, 9000] // 0:03 to 0:12, a 9 second clip
   },
   onload: () => {
     console.log('Startup sound loaded');
@@ -65,28 +67,32 @@ const startupSound = new Howl({
   }
 });
 
-// Helper function to create sprite ranges
-function createSpriteRanges(duration, segmentLength, count, trimStart = 0) {
+// Helper function to create `count` random click sprites of `segmentLength`
+// ms, each starting at or after `trimStart` and ending by `windowEnd` (ms).
+function createSpriteRanges(windowEnd, segmentLength, count, trimStart = 0) {
   const sprites = {};
-  const usableDuration = duration - trimStart;
+  const maxOffset = windowEnd - trimStart - segmentLength;
 
   for (let i = 0; i < count; i++) {
-    // Ensure we don't start before trimStart and have enough room for the segment
-    const maxStart = usableDuration - segmentLength;
-    const randomOffset = Math.floor(Math.random() * maxStart);
-    const start = trimStart + randomOffset;
-    sprites[`click${i}`] = [start, start + segmentLength];
+    const start = trimStart + Math.floor(Math.random() * maxOffset);
+    sprites[`click${i}`] = [start, segmentLength];
   }
   return sprites;
 }
 
+// Our own copy of each click sprite map, so playback does not depend on
+// Howler's private _sprite field.
+const ibmSprites = createSpriteRanges(100000, 300, 8, 2000); // 0:02 to 1:40 of 2:36
+const genericSprites = createSpriteRanges(40000, 300, 8, 1000); // 0:01 to 0:40 of 0:42
+
 // Sound sets configuration
 const soundSets = {
   ibm: {
+    sprites: ibmSprites,
     read: new Howl({
       src: ['sounds/hard-disk-drive-ibm-1999-48823.mp3'],
       volume: 0,  // Start at 0 volume for fading
-      sprite: createSpriteRanges(100000, 300, 8, 2000), // Skip first 2 seconds, 300ms segments
+      sprite: ibmSprites,
       onload: () => {
         console.log('IBM sound loaded successfully');
       },
@@ -99,10 +105,11 @@ const soundSets = {
     })
   },
   generic: {
+    sprites: genericSprites,
     read: new Howl({
       src: ['sounds/computer-hard-drive-access-fan-click-62422.mp3'],
       volume: 0,  // Start at 0 volume for fading
-      sprite: createSpriteRanges(40000, 300, 8, 1000), // Skip first second, X00ms segments
+      sprite: genericSprites,
       onload: () => {
         console.log('Generic sound loaded successfully');
       },
@@ -155,9 +162,7 @@ soundSetSelect.addEventListener('change', (e) => {
 
   // Stop any playing sounds
   Object.values(soundSets).forEach(set => {
-    Object.values(set).forEach(sound => {
-      sound.stop();
-    });
+    set.read.stop();
   });
 });
 
@@ -165,7 +170,6 @@ soundSetSelect.addEventListener('change', (e) => {
 const updateActivityIndicators = (level) => {
   // level should be between 0 and 1
   const dotsToLight = Math.ceil(level * 5);
-  console.log('Dots to light:', dotsToLight, level);
   activityIndicators.forEach((indicator, index) => {
     if (index < dotsToLight) {
       indicator.classList.add('active');
@@ -180,13 +184,10 @@ const updateActivityIndicators = (level) => {
 
 // Function to play sound and show indicator
 const playSound = () => {
-  const sound = soundSets[currentSoundSet].read;
-  console.log('Attempting to play sound from set:', currentSoundSet);
+  const { read: sound, sprites } = soundSets[currentSoundSet];
 
-  if (sound.state() !== 'loaded') {
-    console.error('Sound not loaded yet!');
-    return;
-  }
+  // Still decoding at startup; skip this click rather than queue it.
+  if (sound.state() !== 'loaded') return;
 
   // Stop any currently playing sound
   if (currentSoundId !== null) {
@@ -195,21 +196,19 @@ const playSound = () => {
   }
 
   // Randomly select a sprite
-  const spriteKeys = Object.keys(sound._sprite);
+  const spriteKeys = Object.keys(sprites);
   const randomSprite = spriteKeys[Math.floor(Math.random() * spriteKeys.length)];
 
   // Play the random sprite with fade in/out
   currentSoundId = sound.play(randomSprite);
   sound.fade(0, baseVolume, 10, currentSoundId); // Fade in
 
-  console.log('Sound playback triggered:', randomSprite);
-
   // Show random activity level
   const activityLevel = Math.random() * 0.6 + 0.4; // Random level between 0.4 and 1.0
   updateActivityIndicators(activityLevel);
 
-  // Get the duration from the sprite configuration
-  const duration = sound._sprite[randomSprite][1] - sound._sprite[randomSprite][0];
+  // Sprites are [offset, duration]
+  const duration = sprites[randomSprite][1];
 
   setTimeout(() => {
     if (currentSoundId !== null) {
@@ -224,12 +223,6 @@ const playSound = () => {
   }, duration);
 };
 
-// Handle test button click
-// testButton.addEventListener('click', () => {
-//   console.log('Test button clicked');
-//   playSound();
-// });
-
 // Function to format bytes to human readable
 const formatBytes = (bytes) => {
   if (bytes === 0) return '0 B/s';
@@ -239,27 +232,31 @@ const formatBytes = (bytes) => {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 };
 
+// Combined read+write throughput below which the disk counts as idle.
+// Background housekeeping (logs, caches) rarely exceeds this, so an idle
+// machine stays silent.
+const ACTIVITY_THRESHOLD_BPS = 64 * 1024;
+
 // Handle disk activity
 let isPlaying = false;
 ipcRenderer.on('disk-activity', (event, data) => {
-  console.log('Disk activity detected:', data, event);
-  // Default to read operation if type not specified
-  const type = data?.type || 'read';
-  // Default to a moderate speed if not specified
-  const speed = data?.speed || 11; // 512KB/s default
+  const readBps = data?.readBps ?? 0;
+  const writeBps = data?.writeBps ?? 0;
+  const speed = readBps + writeBps;
 
-  console.log('Disk activity detected:', type, speed);
+  // Silence means silence: no click unless the disk is actually busy.
+  if (speed < ACTIVITY_THRESHOLD_BPS) return;
+
+  const type = readBps >= writeBps ? 'read' : 'write';
 
   // Update speed display
-  const speedText = formatBytes(speed);
-  diskSpeed.textContent = `${type === 'read' ? 'write' : 'read'} ${speedText}`;
+  diskSpeed.textContent = `${type} ${formatBytes(speed)}`;
 
   if (!isPlaying) {
     isPlaying = true;
     playSound();
 
     // Calculate activity level based on speed
-    // Assuming typical SSD speeds max around 2GB/s
     const maxSpeed = .1 * 1024 * 1024 * 1024; // 100MB/s in bytes
     const activityLevel = Math.min(speed / maxSpeed + 0.2, 1);
     updateActivityIndicators(activityLevel);
@@ -278,6 +275,44 @@ ipcRenderer.on('disk-activity', (event, data) => {
   }
 });
 
+// Easter egg: the dial-up modem sound, created once and reused
+const resetIndicatorColours = () => {
+  activityIndicators.forEach(ind => {
+    ind.classList.remove('active');
+    ind.style.backgroundColor = '';
+  });
+};
+
+let dialupAnimation = null;
+const modemSound = new Howl({
+  src: ['sounds/the-sound-of-dial-up-internet-6240.mp3'],
+  preload: true,
+  html5: true,
+  onplay: () => {
+    // Start the dialup animation
+    dialupAnimation = animateDialup();
+  },
+  onend: () => {
+    clearInterval(dialupAnimation);
+    dialupAnimation = null;
+    resetIndicatorColours();
+    console.log('📞 Modem connection terminated');
+  },
+  onloaderror: (id, error) => {
+    console.error('Error loading modem sound:', error);
+    // Show error in UI
+    activityIndicators.forEach(ind => {
+      ind.style.backgroundColor = 'red';
+      setTimeout(() => {
+        ind.style.backgroundColor = '';
+      }, 1000);
+    });
+  },
+  onplayerror: (id, error) => {
+    console.error('Error playing modem sound:', error);
+  }
+});
+
 let clickCount = 0;
 let clickTimer = null;
 
@@ -285,8 +320,6 @@ let clickTimer = null;
 activityIndicators.forEach(indicator => {
   indicator.addEventListener('click', () => {
     clickCount++;
-
-    console.log('🎮 Activity indicator clicked:', clickCount, 'times');
 
     // Reset click count after 1 second of no clicks
     clearTimeout(clickTimer);
@@ -299,43 +332,12 @@ activityIndicators.forEach(indicator => {
       clickCount = 0;
       clearTimeout(clickTimer);
 
+      // Already connecting; don't stack a second copy
+      if (modemSound.playing()) return;
+
       console.log('🎵 Easter egg activated: Dialing into the 90s...');
-      // Play the dial-up modem sound
-      const modemSound = new Howl({
-        src: ['sounds/the-sound-of-dial-up-internet-6240.mp3'],
-        volume: volumeSlider.value / 100,
-        preload: true,
-        html5: true,
-        onload: () => {
-          console.log('Modem sound loaded');
-        },
-        onplay: () => {
-          // Start the dialup animation
-          const animation = animateDialup();
-
-          // Stop the animation when the sound ends
-          modemSound.once('end', () => {
-            clearInterval(animation);
-            // Reset all indicators
-            activityIndicators.forEach(ind => {
-              ind.classList.remove('active');
-              ind.style.backgroundColor = '';
-            });
-            console.log('📞 Modem connection terminated');
-          });
-        },
-        onloaderror: (id, error) => {
-          console.error('Error loading modem sound:', error);
-          // Show error in UI
-          activityIndicators.forEach(ind => {
-            ind.style.backgroundColor = 'red';
-            setTimeout(() => {
-              ind.style.backgroundColor = '';
-            }, 1000);
-          });
-        }
-      });
-
+      // Same 0-7 scale as the Activity slider
+      modemSound.volume(volumeSlider.value / 7);
       modemSound.play();
     }
   });
@@ -354,7 +356,7 @@ const animateDialup = () => {
   ];
 
   let patternIndex = 0;
-  const dialupAnimation = setInterval(() => {
+  const interval = setInterval(() => {
     // Update indicators based on current pattern
     activityIndicators.forEach((indicator, i) => {
       if (patterns[patternIndex][i]) {
@@ -369,5 +371,5 @@ const animateDialup = () => {
     patternIndex = (patternIndex + 1) % patterns.length;
   }, 800); // Change pattern every 800ms to match typical dialup timing
 
-  return dialupAnimation;
+  return interval;
 };

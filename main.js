@@ -1,7 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fs from 'fs';
 import si from 'systeminformation';
 
 // ES Module path resolution
@@ -10,15 +9,27 @@ const __dirname = path.dirname(__filename);
 
 let mainWindow = null;
 let diskMonitorInterval = null;
+let fsStatsUnavailableLogged = false;
 
 async function monitorDiskIO() {
   try {
     const fsStats = await si.fsStats();
-    if (mainWindow) {
-      // Send both read and write speeds
+
+    // systeminformation returns null on platforms it does not support
+    // (notably Windows). Log that once rather than on every tick.
+    if (!fsStats) {
+      if (!fsStatsUnavailableLogged) {
+        fsStatsUnavailableLogged = true;
+        console.warn(`Disk I/O statistics are not available on ${process.platform}; no disk sounds will play.`);
+      }
+      return;
+    }
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      // The first sample after start has null rates; treat them as 0.
       mainWindow.webContents.send('disk-activity', {
-        type: fsStats.rx_sec > fsStats.wx_sec ? 'read' : 'write',
-        speed: Math.max(fsStats.rx_sec, fsStats.wx_sec)
+        readBps: fsStats.rx_sec ?? 0,
+        writeBps: fsStats.wx_sec ?? 0
       });
     }
   } catch (error) {
@@ -27,9 +38,6 @@ async function monitorDiskIO() {
 }
 
 async function createWindow() {
-  // Garbage collect before creating window
-  if (global.gc) global.gc();
-
   // https://www.electronjs.org/docs/latest/tutorial/custom-window-styles#limitations
   mainWindow = new BrowserWindow({
     width: 400,
@@ -40,23 +48,10 @@ async function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      webSecurity: false,
-      // Reduce memory usage
-      enableWebSQL: false,
       spellcheck: false,
       backgroundThrottling: true
     },
-    icon: path.join(__dirname, 'icon', 'hdd-icon.jpg')
-  });
-
-  // Enable loading of ES modules
-  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': ['script-src \'self\' \'unsafe-inline\' \'unsafe-eval\'']
-      }
-    });
+    icon: path.join(__dirname, 'icon.iconset', 'icon_256x256.png')
   });
 
   await mainWindow.loadFile('index.html');

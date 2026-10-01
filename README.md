@@ -17,7 +17,7 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 - 💻 Works in the background while you do actual work
 - 🤓 Perfect for confusing your coworkers
 - 🎮 Hidden surprises for the curious (hint: some dots like to be clicked...)
-- 🪟 Cross-platform: Works on macOS, Windows, and Linux!
+- 🪟 Cross-platform: Runs on macOS, Windows, and Linux (disk activity detection on Windows is coming soon; for now it stays quiet there)
 - 🏋️ Dozens or hundreds of MBs to download and make your SSD workout! Thanks Electron!
 
 ## Installation 🚀
@@ -30,10 +30,10 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 
 #### Note for macOS Users
 
-If you see a message saying the app "is damaged and can't be opened" this is because I don't have the $99 annual developer license from Apple, you workaround this by:
+If you see a message saying the app "is damaged and can't be opened" this is because I don't have the $99 annual developer license from Apple. After dragging the app to your Applications folder, you can work around this by removing the quarantine flag:
 
    ```bash
-   xattr -cr "~/Downloads/Mac Disk Sounds.app"
+   xattr -dr com.apple.quarantine "/Applications/Mac Disk Sounds.app"
    ```
    Then try opening the app normally.
 
@@ -56,7 +56,7 @@ If you see a message saying the app "is damaged and can't be opened" this is bec
 
 ```bash
 # Clone this repository
-git clone https://github.com/yourusername/mac-disk-sounds
+git clone https://github.com/khawkins98/mac-disk-sounds
 
 # Navigate to the directory
 cd mac-disk-sounds
@@ -91,7 +91,7 @@ The release process will:
 - Upload all assets
 - Tag the release with the version from package.json
 
-Note: You'll need a GitHub personal access token with `repo` permissions to publish releases.
+The release workflow publishes with the repository's built-in `GITHUB_TOKEN`; no personal access token is needed.
 
 ## Why? 🤷‍♂️
 
@@ -116,13 +116,15 @@ This project started as an experiment in two ways:
 - IBM hard drive sounds from viertelnachvier on Pixabay
 - Additional HDD sounds from martian on Pixabay
 - [Dialup sound from wtermini on Pixabay](https://pixabay.com/sound-effects/the-sound-of-dial-up-internet-6240/)
-- System 7 interface toolkit from [sakun/system.css](https://github.com/sakofchit/system.css)
+- System 7 interface toolkit from [sakun/system.css](https://github.com/sakofchit/system.css) (MIT; v0.1.11 is bundled in `vendor/system.css/`)
 - Built with Electron and too much free time
 - Inspired by the golden age of spinning rust
 
 ## License 📜
 
 MIT License - Feel free to make your computer sound as vintage as you want!
+
+The sound files in `sounds/` are **not** covered by the MIT licence. They are from Pixabay and used under the Pixabay Content License; see [sounds/CREDITS.md](sounds/CREDITS.md) for authors, sources and the ranges the app uses.
 
 ---
 
