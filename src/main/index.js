@@ -93,7 +93,10 @@ function startMonitor() {
   monitor = new DiskMonitor();
   monitor.on('sample', (sample) => {
     const changed = activity.update(sample);
-    if (changed) sendActivity(changed);
+    if (!changed) return;
+    // Take the blocker before telling the audio window to click.
+    syncAppNapBlocker();
+    sendActivity(changed);
   });
   monitor.start();
   console.log('Disk monitor started.');
@@ -105,39 +108,48 @@ function stopMonitor() {
   monitor.removeAllListeners();
   monitor = null;
   activity.reset(null);
+  syncAppNapBlocker();
   sendActivity(IDLE);
   console.log('Disk monitor stopped.');
 }
 
-// macOS App Nap throttles timers of apps with no visible window. The audio
-// window's click scheduler is a timer, so with the settings window closed
-// App Nap could make the clicks lag or stop. Playing audio normally exempts
-// an app, but Chromium may close its output stream while everything is
-// silent (ambience at 0 and no clicks), so we do not rely on that.
-// 'prevent-app-suspension' opts out of App Nap. The trade-off: it also
-// counts as activity that keeps the Mac from idle sleep (the display can
-// still sleep), so it is held only while sounds are enabled; turning them
-// off from the tray releases it. App Nap does not exist elsewhere, so other
-// platforms never take the blocker and keep normal idle sleep.
-function updateAppNapBlocker(enabled) {
-  if (!IS_MAC) return;
-  if (enabled && appNapBlocker === null) {
+// macOS App Nap throttles the timers of apps with no visible window, and
+// the audio window's click scheduler is a timer. What Chromium already does:
+// while a page is audible (and for a short hold-on after), its
+// MediaWebContentsObserver takes a "Playing audio" wake lock of type
+// kPreventAppSuspension, which on macOS is an IOPMAssertion of type
+// NoIdleSleep (power_save_blocker_mac.cc), and apps holding power
+// assertions or playing audio are not napped. So whenever the ambience is
+// audible, Chromium itself keeps the Mac out of idle sleep; that is
+// Chromium's behaviour for any audio and not something we add. (Set the
+// ambience to 0 to let the Mac idle-sleep.)
+//
+// The gap is the silent case: ambience at 0 and the disk idle, then disk
+// activity starts and the scheduler must start clicking promptly. So we hold
+// our own 'prevent-app-suspension' blocker (the same NoIdleSleep assertion)
+// only while sounds are enabled AND the disk is active, i.e. only while
+// clicks are being scheduled; it is released as soon as the disk goes idle
+// or sounds are turned off. An idle, silent app holds nothing. App Nap does
+// not exist elsewhere, so other platforms never take the blocker.
+function syncAppNapBlocker() {
+  const want = IS_MAC && !quitting && monitor !== null && activity.state.active;
+  if (want && appNapBlocker === null) {
     appNapBlocker = powerSaveBlocker.start('prevent-app-suspension');
-  } else if (!enabled && appNapBlocker !== null) {
+  } else if (!want && appNapBlocker !== null) {
     powerSaveBlocker.stop(appNapBlocker);
     appNapBlocker = null;
   }
 }
 
 // Disabled means silent and idle: the monitor stops (no polling, no child
-// process), the audio window cancels clicks and fades the ambience out.
+// process, no App Nap blocker), the audio window cancels clicks, fades the
+// ambience out and suspends its AudioContext.
 function applyEnabled(enabled) {
   if (enabled) {
     startMonitor();
   } else {
     stopMonitor();
   }
-  updateAppNapBlocker(enabled);
 }
 
 // --- Settings ---
@@ -459,7 +471,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     quitting = true;
     stopMonitor();
-    updateAppNapBlocker(false);
+    syncAppNapBlocker();
     store?.flush();
     tray?.destroy();
     tray = null;
