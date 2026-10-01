@@ -8,6 +8,7 @@
 // Exits non-zero on failure. Used by CI on each platform.
 
 import { DiskMonitor } from '../src/main/disk-monitor.js';
+import { spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,9 +33,38 @@ const logger = {
   }
 };
 
+// Echo the first raw lines the backend reads (iostat or typeperf output,
+// or /proc/diskstats), so a CI failure shows what the parser was given.
+const RAW_LINES = 10;
+let rawShown = 0;
+function showRaw(text) {
+  for (const line of String(text).split(/\r?\n/)) {
+    if (rawShown >= RAW_LINES || line.trim() === '') continue;
+    console.log(`[raw] ${line}`);
+    rawShown += 1;
+  }
+}
+const spawn = (command, args, options) => {
+  console.log(`[spawn] ${command} ${args.join(' ')}`);
+  const child = nodeSpawn(command, args, options);
+  child.stdout?.on('data', showRaw);
+  child.stderr?.on('data', (chunk) => console.log(`[stderr] ${String(chunk).trimEnd()}`));
+  return child;
+};
+let diskstatsShown = false;
+const readFile = async (...args) => {
+  const text = await fs.readFile(...args);
+  if (!diskstatsShown) {
+    diskstatsShown = true;
+    console.log(`[read] ${args[0]} (loop, ram and zram devices left out here)`);
+    showRaw(text.split('\n').filter((line) => !/\s(?:loop|ram|zram)\d+\s/.test(line)).join('\n'));
+  }
+  return text;
+};
+
 const isRate = (value) => value === null || (Number.isFinite(value) && value >= 0);
 
-const monitor = new DiskMonitor({ logger });
+const monitor = new DiskMonitor({ logger, spawn, readFile });
 monitor.on('sample', (sample) => {
   samples.push(sample);
   const mb = (value) => (value === null ? 'n/a' : (value / 1024 / 1024).toFixed(2));
