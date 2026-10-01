@@ -17,7 +17,7 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 - 💻 Works in the background while you do actual work
 - 🤓 Perfect for confusing your coworkers
 - 🎮 Hidden surprises for the curious (hint: some dots like to be clicked...)
-- 🪟 Cross-platform: Runs on macOS, Windows, and Linux (disk activity detection on Windows is coming soon; for now it stays quiet there)
+- 🪟 Cross-platform: Works on macOS, Windows, and Linux!
 - 🏋️ Dozens or hundreds of MBs to download and make your SSD workout! Thanks Electron!
 
 ## Installation 🚀
