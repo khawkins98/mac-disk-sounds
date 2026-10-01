@@ -410,6 +410,7 @@ if (!app.requestSingleInstanceLock()) {
     // in System Settings).
     if (loginItem.supported) {
       try {
+        if (loginItem.repair()) console.log('Launch at login entry updated to this copy of the app.');
         store.update({ launchAtLogin: loginItem.get() });
       } catch (error) {
         console.warn('Cannot read launch at login:', error.message);

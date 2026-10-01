@@ -25,9 +25,17 @@ function fakeApp({ isPackaged = true, openAtLogin = false, wasOpenedAtLogin: atL
   };
 }
 
-test('quoteExecArg quotes and escapes for a desktop entry Exec key', () => {
+test('quoteExecArg quotes, escapes, then doubles backslashes for the string layer', () => {
   assert.equal(quoteExecArg('/opt/Mac Disk Sounds/mac-disk-sounds'), '"/opt/Mac Disk Sounds/mac-disk-sounds"');
-  assert.equal(quoteExecArg('/a/"b"/$c/`d`/\\e/100%'), '"/a/\\"b\\"/\\$c/\\`d\\`/\\\\e/100%%"');
+  // Quoting layer: \" \$ \` \\ ; string layer then doubles every backslash.
+  assert.equal(quoteExecArg('/a"b'), '"/a\\\\"b"');
+  assert.equal(quoteExecArg('/a$b'), '"/a\\\\$b"');
+  assert.equal(quoteExecArg('/a`b'), '"/a\\\\`b"');
+  assert.equal(quoteExecArg('/a\\b'), '"/a\\\\\\\\b"');
+});
+
+test('quoteExecArg refuses a % in the path', () => {
+  assert.throws(() => quoteExecArg('/opt/100%/app'), /not supported/);
 });
 
 test('autostartDesktopEntry starts the app hidden', () => {
@@ -62,13 +70,23 @@ test('macOS and Windows use the login item API; Windows passes --hidden', () => 
   assert.equal(macItem.supported, true);
   assert.equal(macItem.get(), true);
   macItem.set(false);
-  assert.deepEqual(mac.calls.at(-1), ['set', { openAtLogin: false, args: [] }]);
+  assert.deepEqual(mac.calls.at(-1), ['set', { openAtLogin: false }]);
+  assert.equal(macItem.repair(), false);
 
   const win = fakeApp();
-  const winItem = createLoginItem({ app: win, platform: 'win32' });
+  const winItem = createLoginItem({ app: win, platform: 'win32', env: {} });
   winItem.get();
   winItem.set(true);
-  assert.deepEqual(win.calls, [['get', { args: [HIDDEN_ARG] }], ['set', { openAtLogin: true, args: [HIDDEN_ARG] }]]);
+  assert.deepEqual(win.calls, [['get', { args: [HIDDEN_ARG] }], ['set', { args: [HIDDEN_ARG], openAtLogin: true }]]);
+});
+
+test('the Windows portable build registers the portable .exe, not its temp copy', () => {
+  const win = fakeApp();
+  const item = createLoginItem({ app: win, platform: 'win32', env: { PORTABLE_EXECUTABLE_FILE: 'D:\\Tools\\MDS.exe' } });
+  item.get();
+  item.set(true);
+  const expected = { args: [HIDDEN_ARG], path: 'D:\\Tools\\MDS.exe' };
+  assert.deepEqual(win.calls, [['get', expected], ['set', { ...expected, openAtLogin: true }]]);
 });
 
 test('Linux writes and removes an autostart entry', (t) => {
@@ -87,6 +105,30 @@ test('Linux writes and removes an autostart entry', (t) => {
   assert.equal(fs.existsSync(file), false);
   // Removing twice is fine.
   item.set(false);
+});
+
+test('Linux repair points a stale entry at the current executable', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mds-home-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, '.config', 'autostart', 'mac-disk-sounds.desktop');
+  const at = (appimage) => createLoginItem({ app: fakeApp(), platform: 'linux', env: { APPIMAGE: appimage }, home });
+
+  // No entry: nothing to repair, and none is created.
+  assert.equal(at('/apps/mds-1.0.AppImage').repair(), false);
+  assert.equal(fs.existsSync(file), false);
+
+  at('/apps/mds-1.0.AppImage').set(true);
+  assert.equal(at('/apps/mds-1.0.AppImage').repair(), false, 'up to date');
+
+  // After an update the new AppImage has a new name.
+  assert.equal(at('/apps/mds-1.1.AppImage').repair(), true);
+  assert.match(fs.readFileSync(file, 'utf8'), /\nExec="\/apps\/mds-1.1.AppImage" --hidden\n/);
+  assert.equal(at('/apps/mds-1.1.AppImage').repair(), false);
+});
+
+test('Linux launch at login is not offered for a path with %', () => {
+  const item = createLoginItem({ app: fakeApp(), platform: 'linux', env: {}, execPath: '/opt/100%/app', home: '/nonexistent' });
+  assert.equal(item.supported, false);
 });
 
 test('wasOpenedAtLogin: --hidden anywhere, or macOS says so', () => {
