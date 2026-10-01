@@ -1,5 +1,7 @@
 # 🎶 Mac Disk Sounds 💾
 
+<img src="build/icon.png" alt="The Mac Disk Sounds icon: a hard disk with its lid off" width="128" height="128">
+
 _Because your modern computer deserves to sound like it's from 1999_
 
 [![Download Now](https://img.shields.io/github/v/release/khawkins98/mac-disk-sounds?label=Download%20Now&style=for-the-badge)](https://github.com/khawkins98/mac-disk-sounds/releases)
@@ -92,6 +94,13 @@ node scripts/smoke-monitor.mjs
 # Redraw the tray icons in assets/tray/ (only after changing the script)
 node scripts/make-tray-icons.mjs
 
+# Redraw the app icon: build/icon.png, icon.icns and icon.ico
+# (only after changing the script; the tests check they match it)
+node scripts/make-app-icon.mjs
+
+# Check the electron-builder config points at real files
+node scripts/check-build-config.mjs
+
 # Build for your platform
 npm run build        # Builds for all platforms (macOS, Windows, Linux)
 npm run build:mac    # Builds for macOS only
@@ -110,8 +119,10 @@ src/renderer/    the settings window (index.html, renderer.js, styles.css),
                  and the vendored system.css
 assets/sounds/   the sound files and their credits
 assets/tray/     tray icons, drawn by scripts/make-tray-icons.mjs
-build/           app icons used by electron-builder
-scripts/         icon generator and the disk monitor smoke test
+build/           app icons used by electron-builder, drawn by
+                 scripts/make-app-icon.mjs
+scripts/         icon generators, the build config check and the disk
+                 monitor smoke test
 test/            node --test unit tests
 ```
 
