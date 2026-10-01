@@ -172,3 +172,80 @@ test('a backwards clock jump during warm-up restarts the window instead of stall
   assert.equal(model.update({ readBps: 100 * MIB, writeBps: 0, at: 4000 }), null);
   assert.equal(model.update({ readBps: 100 * MIB, writeBps: 0, at: 6000 }).active, true);
 });
+
+// --- Duty cycle ---
+
+const repeat = (pattern, times) => Array.from({ length: times }, () => pattern).flat();
+const activeFlags = (model, rates, startAt) => rates.map((bps, i) => {
+  model.update({ readBps: bps, writeBps: 0, at: startAt + i * 1000 });
+  return model.state.active;
+});
+
+test('a periodic writer (one busy sample every 3 s) goes idle and stays idle', () => {
+  const model = startedModel();
+  // Two busy samples in a row (a write that straddled a sample) start it;
+  // then one 100 KB/s sample every third second for two minutes.
+  const flags = activeFlags(model, [100 * KIB, 100 * KIB, ...repeat([0, 0, 100 * KIB], 40)], DEFAULTS.warmupMs);
+  assert.equal(flags[1], true, 'went active');
+  const idleAt = flags.indexOf(false, 2);
+  assert.ok(idleAt > 0 && idleAt <= 2 + DEFAULTS.dutyWindow + 3, `went idle at sample ${idleAt}`);
+  assert.ok(flags.slice(idleAt).every((active) => !active), 'never comes back');
+});
+
+test('a periodic writer with big bursts cannot switch it back on every time', () => {
+  const model = startedModel();
+  const flags = activeFlags(model, repeat([0, 0, 8 * MIB], 40), DEFAULTS.warmupMs);
+  // Each burst may switch it on until the pattern is recognised; after that
+  // it stays off.
+  const firstIdle = flags.findIndex((active, i) => i > 3 && !active);
+  const lastMinute = flags.slice(-60);
+  assert.ok(firstIdle > 0);
+  assert.ok(lastMinute.every((active) => !active), `active in the last minute: ${lastMinute.filter(Boolean).length} s`);
+});
+
+test('sustained load stays active', () => {
+  const model = startedModel();
+  const flags = activeFlags(model, repeat([2 * MIB, 5 * MIB, 300 * KIB], 40), DEFAULTS.warmupMs);
+  assert.ok(flags.slice(1).every(Boolean));
+});
+
+test('bursty real load (busy half the time or more) keeps clicking', () => {
+  for (const pattern of [[1, 1, 0, 0], [1, 0], [1, 1, 0], [1, 1, 1, 0, 0]]) {
+    const model = startedModel();
+    const rates = repeat(pattern.map((busy) => (busy ? 6 * MIB : 0)), 30);
+    const flags = activeFlags(model, rates, DEFAULTS.warmupMs);
+    const from = flags.indexOf(true);
+    assert.ok(from >= 0 && from <= 1, `pattern ${pattern} went active at ${from}`);
+    assert.ok(flags.slice(from).every(Boolean), `pattern ${pattern} dropped out`);
+  }
+});
+
+test('real load starting on top of a periodic writer still goes active quickly', () => {
+  const model = startedModel();
+  const start = DEFAULTS.warmupMs;
+  activeFlags(model, [100 * KIB, 100 * KIB, ...repeat([0, 0, 100 * KIB], 10)], start);
+  assert.equal(model.state.active, false);
+  assert.equal(model.periodic, true);
+  const flags = activeFlags(model, repeat([2 * MIB], 6), start + 32 * 1000);
+  const at = flags.indexOf(true);
+  assert.ok(at >= 0 && at <= 2, `active after ${at + 1} s`);
+  assert.ok(flags.slice(at).every(Boolean));
+});
+
+test('once the periodic writer stops, a single burst goes active at once again', () => {
+  const model = startedModel();
+  const start = DEFAULTS.warmupMs;
+  activeFlags(model, [100 * KIB, 100 * KIB, ...repeat([0, 0, 100 * KIB], 10)], start);
+  assert.equal(model.periodic, true);
+  // Eight quiet seconds empty the window.
+  activeFlags(model, repeat([0], DEFAULTS.dutyWindow), start + 32 * 1000);
+  assert.equal(model.periodic, false);
+  const change = model.update({ readBps: DEFAULTS.burstBps, writeBps: 0, at: start + 41 * 1000 });
+  assert.equal(change.active, true);
+});
+
+test('a one-off burst still winds down over samplesToIdle quiet samples', () => {
+  const model = startedModel({ refreshMs: Infinity });
+  const flags = activeFlags(model, [50 * MIB, 0, 0, 0, 0], DEFAULTS.warmupMs);
+  assert.deepEqual(flags, [true, true, true, false, false]);
+});

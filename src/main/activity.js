@@ -12,6 +12,16 @@ export const DEFAULTS = Object.freeze({
   samplesToActivate: 2,
   // Consecutive samples below the threshold needed to go idle.
   samplesToIdle: 3,
+  // Duty cycle: once it has been active for a whole window of
+  // `dutyWindow` samples, it stays active only while at least
+  // `minDutyCycle` of the last `dutyWindow` samples were above the
+  // threshold. Without this a periodic background writer (one busy sample
+  // every 2-3 s) never leaves `samplesToIdle` quiet samples in a row and
+  // would keep it clicking, and holding the macOS power assertion, forever.
+  // 8 samples at 50%: two busy seconds in four always passes, one in three
+  // never does.
+  dutyWindow: 8,
+  minDutyCycle: 0.5,
   // Throughput that maps to the top level bucket.
   maxBps: 256 * 1024 * 1024,
   // Samples this soon after start are ignored, so the app's own startup I/O
@@ -59,6 +69,14 @@ export class ActivityModel {
     this.warmedUp = false;
     this.above = 0;
     this.below = 0;
+    // Busy (true) or quiet (false) for the last `dutyWindow` samples.
+    this.history = [];
+    // Samples since it last went active.
+    this.activeSamples = 0;
+    // Set when it went idle for failing the duty cycle: until the window
+    // has gone fully quiet, going active again also needs the duty cycle,
+    // so the same periodic pattern cannot switch it straight back on.
+    this.periodic = false;
     this.lastReportAt = null;
     this.state = { active: false, level: 0, readBps: 0, writeBps: 0, totalBps: 0 };
   }
@@ -87,13 +105,28 @@ export class ActivityModel {
       this.below += 1;
       this.above = 0;
     }
+    this.history.push(busy);
+    if (this.history.length > o.dutyWindow) this.history.shift();
+    const busyInWindow = this.history.filter(Boolean).length;
+    const dutyMet = busyInWindow >= Math.ceil(o.minDutyCycle * o.dutyWindow);
+    if (this.periodic && busyInWindow === 0) this.periodic = false;
 
     let active = this.state.active;
-    if (!active && busy && (this.above >= o.samplesToActivate || total >= o.burstBps)) {
+    if (!active && busy && (this.above >= o.samplesToActivate || total >= o.burstBps) && (!this.periodic || dutyMet)) {
       active = true;
-    } else if (active && !busy && this.below >= o.samplesToIdle) {
-      active = false;
+      this.activeSamples = 0;
+      this.periodic = false;
+    } else if (active && !busy) {
+      if (this.below >= o.samplesToIdle) {
+        active = false;
+      } else if (this.activeSamples >= o.dutyWindow && !dutyMet) {
+        // The whole window is from this active spell, and too little of it
+        // was busy: a periodic writer, not real work.
+        active = false;
+        this.periodic = true;
+      }
     }
+    if (active) this.activeSamples += 1;
 
     // While active but briefly below the threshold, keep clicking gently.
     const level = active ? Math.max(1, levelForBps(total, o)) : 0;
