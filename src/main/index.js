@@ -196,6 +196,24 @@ const sharedWebPreferences = () => ({
   spellcheck: false
 });
 
+// Neither page has anything to spell check. `spellcheck: false` in
+// webPreferences only stops the pages checking; the session still loads
+// the Hunspell dictionary for the UI language when it is created, and on
+// Windows and Linux that means downloading it from redirector.gvt1.com at
+// every first start. Clearing the session's languages (before any window
+// exists) drops that dictionary and cancels the download; the empty list is
+// saved in the session's preferences, so later starts do not ask for one at
+// all. On macOS the system spell checker is used and the language call is a
+// no-op.
+function disableSpellChecker(ses) {
+  try {
+    ses.setSpellCheckerEnabled(false);
+    if (!IS_MAC) ses.setSpellCheckerLanguages([]);
+  } catch (error) {
+    console.warn('Cannot turn off the spell checker:', error.message);
+  }
+}
+
 // Neither page navigates, opens windows or embeds anything; links go
 // through openExternal.
 function lockDown(webContents) {
@@ -440,6 +458,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     // The pages need no permissions (audio output is not one).
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    disableSpellChecker(session.defaultSession);
     // No Dock icon: this is a menu bar app. Packaged builds also set
     // LSUIElement (package.json), which hides it before launch; this covers
     // development runs.
