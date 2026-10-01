@@ -1,129 +1,18 @@
-const { ipcRenderer, shell } = require('electron');
-const { Howl, Howler } = require('howler');
+// Renderer: plain browser JavaScript. It talks to the main process only
+// through window.diskSounds (preload.cjs) and only renders and plays.
+import { AudioEngine } from './audio.js';
 
-// Window focus handling
-const mainWindow = document.getElementById('main-window');
+const bridge = window.diskSounds;
 
-// Listen for window focus/blur events
-ipcRenderer.on('window-focus-change', (event, isFocused) => {
-  if (isFocused) {
-    mainWindow.classList.remove('inactive');
-  } else {
-    mainWindow.classList.add('inactive');
-  }
-});
-
-// Window controls
-document.querySelector('button[aria-label="Close"]').addEventListener('click', () => {
-  ipcRenderer.send('window-control', 'close');
-});
-
-document.querySelector('button[aria-label="Resize"]').addEventListener('click', () => {
-  ipcRenderer.send('window-control', 'minimize');
-});
-
-// Handle external links
-document.addEventListener('click', (event) => {
-  if (event.target.tagName === 'A' && event.target.href.startsWith('http')) {
-    event.preventDefault();
-    shell.openExternal(event.target.href);
-  }
-});
-
-// Howler sprites are [offset, duration] in milliseconds, not [start, end].
-
-// Background loop sound configuration
-const backgroundSound = new Howl({
-  src: ['sounds/hard-disk-drive-ibm-1999-48823.mp3'],
-  volume: 0,
-  sprite: {
-    loop: [110000, 20000], // 1:50 to 2:10 of a 2:36 file
-  },
-  loop: true,
-  onload: () => {
-    console.log('Background loop loaded');
-    const id = backgroundSound.play('loop');
-    backgroundSound.fade(0, 0.2, 1000, id); // Fade in to 20% volume
-  }
-});
-
-// Startup sound configuration
-const startupSound = new Howl({
-  src: ['sounds/hard-disk-drive-ibm-1999-48823.mp3'],
-  volume: 0,
-  sprite: {
-    startup: [3000, 9000] // 0:03 to 0:12, a 9 second clip
-  },
-  onload: () => {
-    console.log('Startup sound loaded');
-    // Play startup sound with fade in/out
-    const id = startupSound.play('startup');
-    startupSound.fade(0, 0.3, 1000, id); // Fade in over 1 second
-
-    // Fade out near the end
-    setTimeout(() => {
-      startupSound.fade(0.3, 0, 1000, id);
-    }, 8000); // Start fade out 1 second before end
-  }
-});
-
-// Helper function to create `count` random click sprites of `segmentLength`
-// ms, each starting at or after `trimStart` and ending by `windowEnd` (ms).
-function createSpriteRanges(windowEnd, segmentLength, count, trimStart = 0) {
-  const sprites = {};
-  const maxOffset = windowEnd - trimStart - segmentLength;
-
-  for (let i = 0; i < count; i++) {
-    const start = trimStart + Math.floor(Math.random() * maxOffset);
-    sprites[`click${i}`] = [start, segmentLength];
-  }
-  return sprites;
-}
-
-// Our own copy of each click sprite map, so playback does not depend on
-// Howler's private _sprite field.
-const ibmSprites = createSpriteRanges(100000, 300, 8, 2000); // 0:02 to 1:40 of 2:36
-const genericSprites = createSpriteRanges(40000, 300, 8, 1000); // 0:01 to 0:40 of 0:42
-
-// Sound sets configuration
-const soundSets = {
-  ibm: {
-    sprites: ibmSprites,
-    read: new Howl({
-      src: ['sounds/hard-disk-drive-ibm-1999-48823.mp3'],
-      volume: 0,  // Start at 0 volume for fading
-      sprite: ibmSprites,
-      onload: () => {
-        console.log('IBM sound loaded successfully');
-      },
-      onloaderror: (id, error) => {
-        console.error('Error loading IBM sound:', error);
-      },
-      onplayerror: (id, error) => {
-        console.error('Error playing IBM sound:', error);
-      }
-    })
-  },
-  generic: {
-    sprites: genericSprites,
-    read: new Howl({
-      src: ['sounds/computer-hard-drive-access-fan-click-62422.mp3'],
-      volume: 0,  // Start at 0 volume for fading
-      sprite: genericSprites,
-      onload: () => {
-        console.log('Generic sound loaded successfully');
-      },
-      onloaderror: (id, error) => {
-        console.error('Error loading generic sound:', error);
-      },
-      onplayerror: (id, error) => {
-        console.error('Error playing generic sound:', error);
-      }
-    })
-  }
-};
+// Clicks per second for each activity level (index 0 = idle).
+const CLICKS_PER_SECOND = [0, 1.5, 2.5, 4, 6, 9];
+// How far ahead clicks are scheduled on the audio clock, and how often the
+// schedule is topped up.
+const LOOKAHEAD_SECONDS = 0.25;
+const SCHEDULER_INTERVAL_MS = 100;
 
 // UI elements
+const mainWindow = document.getElementById('main-window');
 const volumeSlider = document.getElementById('volume');
 const volumeValue = document.getElementById('volume-value');
 const backgroundVolumeSlider = document.getElementById('background-volume');
@@ -132,244 +21,200 @@ const soundSetSelect = document.getElementById('sound-set');
 const activityIndicators = Array.from({ length: 5 }, (_, i) => document.getElementById(`activity-indicator-${i + 1}`));
 const diskSpeed = document.getElementById('disk-speed');
 
-// Current sound set
-let currentSoundSet = 'generic';
-let currentSoundId = null;
-let baseVolume = 0.5; // Store base volume level
-let backgroundBaseVolume = 0.2; // Store background volume level
+// Sliders are 0-7.
+const sliderVolume = (slider) => parseInt(slider.value, 10) / 7;
 
-// Update volume display and all sound volumes
-volumeSlider.addEventListener('input', (e) => {
-  const volumeLevel = parseInt(e.target.value);
-  volumeValue.textContent = volumeLevel;
-  // Convert 0-7 scale to 0-1 for Howler
-  baseVolume = volumeLevel / 7;
+// Window focus styling
+const setFocused = (focused) => mainWindow.classList.toggle('inactive', !focused);
+window.addEventListener('focus', () => setFocused(true));
+window.addEventListener('blur', () => setFocused(false));
+setFocused(document.hasFocus());
+
+// Window controls
+document.querySelector('button[aria-label="Close"]').addEventListener('click', () => {
+  bridge.windowControl('close');
+});
+document.querySelector('button[aria-label="Resize"]').addEventListener('click', () => {
+  bridge.windowControl('minimize');
 });
 
-// Update background volume
-backgroundVolumeSlider.addEventListener('input', (e) => {
-  const volumeLevel = parseInt(e.target.value);
-  backgroundVolumeValue.textContent = volumeLevel;
-  // Convert 0-7 scale to 0-1 for Howler
-  backgroundBaseVolume = volumeLevel / 7;
-  backgroundSound.volume(backgroundBaseVolume);
+// External links open in the browser (main checks them against an allowlist).
+document.addEventListener('click', (event) => {
+  const link = event.target.closest('a[href]');
+  if (!link) return;
+  event.preventDefault();
+  bridge.openExternal(link.href);
 });
 
-// Handle sound set selection
-soundSetSelect.addEventListener('change', (e) => {
-  currentSoundSet = e.target.value;
-  console.log('Switched to sound set:', currentSoundSet);
+const audio = new AudioEngine();
+let audioReady = false;
 
-  // Stop any playing sounds
-  Object.values(soundSets).forEach(set => {
-    set.read.stop();
-  });
+// Controls
+let clickVolume = sliderVolume(volumeSlider);
+let currentSoundSet = soundSetSelect.value;
+audio.setBackgroundVolume(sliderVolume(backgroundVolumeSlider));
+
+volumeSlider.addEventListener('input', () => {
+  volumeValue.textContent = volumeSlider.value;
+  clickVolume = sliderVolume(volumeSlider);
 });
 
-// Function to update activity indicators based on disk activity level
-const updateActivityIndicators = (level) => {
-  // level should be between 0 and 1
-  const dotsToLight = Math.ceil(level * 5);
-  activityIndicators.forEach((indicator, index) => {
-    if (index < dotsToLight) {
-      indicator.classList.add('active');
-    } else {
-      // Add small delay before removing active class
-      setTimeout(() => {
-        indicator.classList.remove('active');
-      }, 100); // 100ms delay
-    }
-  });
+backgroundVolumeSlider.addEventListener('input', () => {
+  backgroundVolumeValue.textContent = backgroundVolumeSlider.value;
+  audio.setBackgroundVolume(sliderVolume(backgroundVolumeSlider));
+});
+
+soundSetSelect.addEventListener('change', () => {
+  currentSoundSet = soundSetSelect.value;
+});
+
+// Activity indicators. One function owns the dots; it stands aside while the
+// easter egg animation runs, so the two never fight over them.
+let dialupAnimation = null;
+const setLitDots = (count) => {
+  if (dialupAnimation) return;
+  activityIndicators.forEach((indicator, i) => indicator.classList.toggle('active', i < count));
 };
 
-// Function to play sound and show indicator
-const playSound = () => {
-  const { read: sound, sprites } = soundSets[currentSoundSet];
-
-  // Still decoding at startup; skip this click rather than queue it.
-  if (sound.state() !== 'loaded') return;
-
-  // Stop any currently playing sound
-  if (currentSoundId !== null) {
-    sound.fade(baseVolume, 0, 10, currentSoundId);
-    sound.stop(currentSoundId);
-  }
-
-  // Randomly select a sprite
-  const spriteKeys = Object.keys(sprites);
-  const randomSprite = spriteKeys[Math.floor(Math.random() * spriteKeys.length)];
-
-  // Play the random sprite with fade in/out
-  currentSoundId = sound.play(randomSprite);
-  sound.fade(0, baseVolume, 10, currentSoundId); // Fade in
-
-  // Show random activity level
-  const activityLevel = Math.random() * 0.6 + 0.4; // Random level between 0.4 and 1.0
-  updateActivityIndicators(activityLevel);
-
-  // Sprites are [offset, duration]
-  const duration = sprites[randomSprite][1];
-
-  setTimeout(() => {
-    if (currentSoundId !== null) {
-      sound.fade(baseVolume, 0, 10, currentSoundId);
-    }
-  }, duration - 10);
-
-  // Reset indicators and cleanup
-  setTimeout(() => {
-    updateActivityIndicators(0);
-    currentSoundId = null;
-  }, duration);
-};
-
-// Function to format bytes to human readable
 const formatBytes = (bytes) => {
-  if (bytes === 0) return '0 B/s';
+  if (!(bytes > 0)) return '0 B/s';
   const k = 1024;
   const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 };
 
-// Combined read+write throughput below which the disk counts as idle.
-// Background housekeeping (logs, caches) rarely exceeds this, so an idle
-// machine stays silent.
-const ACTIVITY_THRESHOLD_BPS = 64 * 1024;
+const describeSpeed = ({ readBps, writeBps, totalBps }) => {
+  if (readBps === null || writeBps === null) return formatBytes(totalBps);
+  return `${readBps >= writeBps ? 'read' : 'write'} ${formatBytes(totalBps)}`;
+};
 
-// Handle disk activity
-let isPlaying = false;
-ipcRenderer.on('disk-activity', (event, data) => {
-  const readBps = data?.readBps ?? 0;
-  const writeBps = data?.writeBps ?? 0;
-  const speed = readBps + writeBps;
+// Click scheduling. Main says when the disk is active and how busy (level
+// 1-5); while active, clicks are scheduled a little ahead on the audio clock
+// at a density set by the level, with some jitter so it sounds like seeking.
+let activity = { active: false, level: 0 };
+let schedulerTimer = null;
+let nextClickAt = 0;
+let scheduledClicks = [];
+let renderFrame = null;
 
-  // Silence means silence: no click unless the disk is actually busy.
-  if (speed < ACTIVITY_THRESHOLD_BPS) return;
+const nextInterval = (level) => (1 / CLICKS_PER_SECOND[level]) * (0.4 + Math.random() * 1.2);
 
-  const type = readBps >= writeBps ? 'read' : 'write';
-
-  // Update speed display
-  diskSpeed.textContent = `${type} ${formatBytes(speed)}`;
-
-  if (!isPlaying) {
-    isPlaying = true;
-    playSound();
-
-    // Calculate activity level based on speed
-    const maxSpeed = .1 * 1024 * 1024 * 1024; // 100MB/s in bytes
-    const activityLevel = Math.min(speed / maxSpeed + 0.2, 1);
-    updateActivityIndicators(activityLevel);
-
-    const duration = currentSoundSet === 'generic' ? 300 : 200;
-    setTimeout(() => {
-      isPlaying = false;
-      // Don't clear the speed display immediately
-      setTimeout(() => {
-        if (!isPlaying) {
-          diskSpeed.textContent = '';
-          updateActivityIndicators(0);
-        }
-      }, 1000);
-    }, duration);
+const scheduleClicks = () => {
+  if (!activity.active || !audioReady) return;
+  const now = audio.currentTime;
+  // Also pruned here: animation frames do not run while the window is hidden.
+  scheduledClicks = scheduledClicks.filter((click) => click.end > now);
+  if (nextClickAt < now) nextClickAt = now;
+  while (nextClickAt < now + LOOKAHEAD_SECONDS) {
+    const click = audio.click(currentSoundSet, nextClickAt, clickVolume);
+    scheduledClicks.push(click);
+    nextClickAt = click.start + nextInterval(activity.level);
   }
-});
+  startRendering();
+};
 
-// Easter egg: the dial-up modem sound, created once and reused
-const resetIndicatorColours = () => {
-  activityIndicators.forEach(ind => {
-    ind.classList.remove('active');
-    ind.style.backgroundColor = '';
+// Light the dots while a click is actually sounding.
+const renderDots = () => {
+  renderFrame = null;
+  const now = audio.currentTime;
+  scheduledClicks = scheduledClicks.filter((click) => click.end > now);
+  const sounding = scheduledClicks.some((click) => click.start <= now);
+  setLitDots(sounding ? Math.max(1, activity.level) : 0);
+  if (activity.active || scheduledClicks.length > 0) startRendering();
+};
+
+function startRendering() {
+  if (renderFrame === null) renderFrame = requestAnimationFrame(renderDots);
+}
+
+const onActivity = (state) => {
+  activity = state;
+  if (state.active) {
+    // While winding down (active but quiet) keep the last busy reading.
+    if (state.totalBps > 0) diskSpeed.textContent = describeSpeed(state);
+    if (schedulerTimer === null) {
+      schedulerTimer = setInterval(scheduleClicks, SCHEDULER_INTERVAL_MS);
+    }
+    scheduleClicks();
+  } else {
+    diskSpeed.textContent = '';
+    clearInterval(schedulerTimer);
+    schedulerTimer = null;
+  }
+};
+
+bridge.onActivity(onActivity);
+
+// Easter egg: three quick clicks on the dots dial into the 90s.
+const dialupPatterns = [
+  [1, 0, 0, 0, 0], // Initial connection
+  [1, 1, 0, 0, 0], // Handshake start
+  [1, 1, 1, 0, 0], // Negotiating
+  [0, 1, 1, 1, 0], // Synchronizing
+  [0, 0, 1, 1, 1], // Almost there
+  [1, 0, 1, 0, 1], // Final handshake
+  [1, 1, 1, 1, 1] // Connected!
+];
+
+const showDialupPattern = (pattern) => {
+  activityIndicators.forEach((indicator, i) => {
+    indicator.classList.toggle('active', Boolean(pattern[i]));
+    indicator.style.backgroundColor = pattern[i] ? '#32CD32' : '';
   });
 };
 
-let dialupAnimation = null;
-const modemSound = new Howl({
-  src: ['sounds/the-sound-of-dial-up-internet-6240.mp3'],
-  preload: true,
-  html5: true,
-  onplay: () => {
-    // Start the dialup animation
-    dialupAnimation = animateDialup();
-  },
-  onend: () => {
-    clearInterval(dialupAnimation);
-    dialupAnimation = null;
-    resetIndicatorColours();
-    console.log('📞 Modem connection terminated');
-  },
-  onloaderror: (id, error) => {
-    console.error('Error loading modem sound:', error);
-    // Show error in UI
-    activityIndicators.forEach(ind => {
-      ind.style.backgroundColor = 'red';
-      setTimeout(() => {
-        ind.style.backgroundColor = '';
-      }, 1000);
-    });
-  },
-  onplayerror: (id, error) => {
-    console.error('Error playing modem sound:', error);
-  }
-});
+const stopDialupAnimation = () => {
+  clearInterval(dialupAnimation);
+  dialupAnimation = null;
+  activityIndicators.forEach((indicator) => {
+    indicator.style.backgroundColor = '';
+  });
+  setLitDots(0);
+};
+
+const startDialupAnimation = () => {
+  let patternIndex = 0;
+  showDialupPattern(dialupPatterns[patternIndex]);
+  // Change pattern every 800 ms, roughly the pace of a real handshake.
+  dialupAnimation = setInterval(() => {
+    patternIndex = (patternIndex + 1) % dialupPatterns.length;
+    showDialupPattern(dialupPatterns[patternIndex]);
+  }, 800);
+};
 
 let clickCount = 0;
 let clickTimer = null;
-
-// Update click handler for all indicators
-activityIndicators.forEach(indicator => {
+activityIndicators.forEach((indicator) => {
   indicator.addEventListener('click', () => {
     clickCount++;
-
-    // Reset click count after 1 second of no clicks
     clearTimeout(clickTimer);
+    // Reset the count after a second without clicks.
     clickTimer = setTimeout(() => {
       clickCount = 0;
     }, 1000);
 
-    // Easter egg: After 3 quick clicks
-    if (clickCount === 3) {
-      clickCount = 0;
-      clearTimeout(clickTimer);
-
-      // Already connecting; don't stack a second copy
-      if (modemSound.playing()) return;
-
-      console.log('🎵 Easter egg activated: Dialing into the 90s...');
-      // Same 0-7 scale as the Activity slider
-      modemSound.volume(volumeSlider.value / 7);
-      modemSound.play();
+    if (clickCount < 3) return;
+    clickCount = 0;
+    clearTimeout(clickTimer);
+    if (!audioReady || audio.modemPlaying) return;
+    // Same 0-7 scale as the Activity slider.
+    if (audio.playModem(clickVolume, stopDialupAnimation)) {
+      startDialupAnimation();
     }
   });
 });
 
-// Function to animate lights during dialup
-const animateDialup = () => {
-  const patterns = [
-    [1,0,0,0,0], // Initial connection
-    [1,1,0,0,0], // Handshake start
-    [1,1,1,0,0], // Negotiating
-    [0,1,1,1,0], // Synchronizing
-    [0,0,1,1,1], // Almost there
-    [1,0,1,0,1], // Final handshake
-    [1,1,1,1,1], // Connected!
-  ];
-
-  let patternIndex = 0;
-  const interval = setInterval(() => {
-    // Update indicators based on current pattern
-    activityIndicators.forEach((indicator, i) => {
-      if (patterns[patternIndex][i]) {
-        indicator.classList.add('active');
-        indicator.style.backgroundColor = '#32CD32';
-      } else {
-        indicator.classList.remove('active');
-        indicator.style.backgroundColor = '';
-      }
-    });
-
-    patternIndex = (patternIndex + 1) % patterns.length;
-  }, 800); // Change pattern every 800ms to match typical dialup timing
-
-  return interval;
-};
+// Start up: decode everything once, then the spin-up clip and the ambience.
+audio.resumeWhenAllowed();
+audio.load().then(() => {
+  audioReady = true;
+  audio.playStartup();
+  audio.startBackground();
+  if (activity.active) scheduleClicks();
+}).catch((error) => {
+  console.error('Could not load sounds:', error);
+  activityIndicators.forEach((indicator) => {
+    indicator.style.backgroundColor = 'red';
+  });
+});

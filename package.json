@@ -24,7 +24,12 @@
     "files": [
       "package.json",
       "main.js",
+      "activity.js",
+      "disk-monitor.js",
+      "disk-parsers.js",
+      "preload.cjs",
       "renderer.js",
+      "audio.js",
       "index.html",
       "vendor/system.css/**",
       "sounds/*.mp3",
@@ -103,9 +108,5 @@
   "devDependencies": {
     "electron": "^44.5.1",
     "electron-builder": "^26.15.3"
-  },
-  "dependencies": {
-    "howler": "^2.2.4",
-    "systeminformation": "^5.33.15"
   }
 }
