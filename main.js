@@ -1,7 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fs from 'fs';
 import si from 'systeminformation';
 
 // ES Module path resolution
@@ -39,9 +38,6 @@ async function monitorDiskIO() {
 }
 
 async function createWindow() {
-  // Garbage collect before creating window
-  if (global.gc) global.gc();
-
   // https://www.electronjs.org/docs/latest/tutorial/custom-window-styles#limitations
   mainWindow = new BrowserWindow({
     width: 400,
@@ -52,8 +48,6 @@ async function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      // Reduce memory usage
-      enableWebSQL: false,
       spellcheck: false,
       backgroundThrottling: true
     },

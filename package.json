@@ -96,14 +96,16 @@
     "sounds",
     "retro"
   ],
-  "author": "",
+  "author": "Ken Hawkins",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
   "devDependencies": {
     "electron": "^44.5.1",
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
-    "fs-extra": "^11.4.1",
     "howler": "^2.2.4",
     "systeminformation": "^5.33.15"
   }

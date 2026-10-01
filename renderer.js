@@ -223,12 +223,6 @@ const playSound = () => {
   }, duration);
 };
 
-// Handle test button click
-// testButton.addEventListener('click', () => {
-//   console.log('Test button clicked');
-//   playSound();
-// });
-
 // Function to format bytes to human readable
 const formatBytes = (bytes) => {
   if (bytes === 0) return '0 B/s';
