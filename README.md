@@ -31,14 +31,19 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 2. Drag the app to your Applications folder
 3. Open it and enjoy the sweet sounds of yesteryear!
 
-#### Note for macOS Users
+#### The app is not signed
 
-If you see a message saying the app "is damaged and can't be opened" this is because I don't have the $99 annual developer license from Apple. After dragging the app to your Applications folder, you can work around this by removing the quarantine flag:
+Mac Disk Sounds is **not signed or notarised** by Apple (that needs a $99 a year developer membership). macOS quarantines anything downloaded from the internet, and for an unsigned app it then refuses to open it, usually saying the app "is damaged and can't be opened" (it is not damaged). After dragging the app to your Applications folder, remove the quarantine flag in Terminal:
 
-   ```bash
-   xattr -dr com.apple.quarantine "/Applications/Mac Disk Sounds.app"
-   ```
-   Then try opening the app normally.
+```bash
+xattr -dr com.apple.quarantine "/Applications/Mac Disk Sounds.app"
+```
+
+Then open the app normally. You need to do this again after installing each new version. (`xattr -dr` removes the `com.apple.quarantine` attribute from the app and everything inside it; it changes nothing else.)
+
+#### Updates
+
+The app does not update itself. To see whether there is a newer version, choose **Check for Updates…** from its menu bar menu: it opens the [latest release](https://github.com/khawkins98/mac-disk-sounds/releases/latest) on GitHub, and the menu item above it shows the version you have. To update, quit the app, install the new version over the old one as above and run the `xattr` command again.
 
 ### Windows
 
@@ -63,6 +68,7 @@ Mac Disk Sounds runs from the menu bar (macOS) or the system tray (Windows and L
 - **Sound Set**: which recorded drive the clicks come from.
 - **Open Settings…**: the System 7 window with the activity lights, the sound set and the click and ambience volumes.
 - **Launch at Login** (installed builds only).
+- The version you are running, and **Check for Updates…**, which opens the latest release on GitHub in your browser (the app does not update itself).
 - **Quit**.
 
 Clicking the icon opens or closes the settings window (on Linux most trays only show the menu, so use **Open Settings…**). Closing the window keeps the sounds going; only **Quit** stops the app. Starting the app by hand opens the settings window; starting at login does not. Settings are saved as `settings.json` in the app's user data folder. On Linux, Launch at Login writes `~/.config/autostart/mac-disk-sounds.desktop`.

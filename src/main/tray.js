@@ -16,7 +16,7 @@ import { trayMenuTemplate, trayTooltip } from './tray-menu.js';
  *
  * @returns {{refresh(settings: object): void, destroy(): void}}
  */
-export function createTray({ iconDir, platform = process.platform, settings, loginItemSupported, actions, onClick }) {
+export function createTray({ iconDir, platform = process.platform, settings, loginItemSupported, version, actions, onClick }) {
   const isMac = platform === 'darwin';
   // macOS recolours a "Template" image for light and dark menu bars; the
   // matching @2x file is picked up automatically on Retina displays.
@@ -27,7 +27,7 @@ export function createTray({ iconDir, platform = process.platform, settings, log
   let menu = null;
 
   const refresh = (current) => {
-    menu = Menu.buildFromTemplate(trayMenuTemplate(current, { loginItemSupported }, actions));
+    menu = Menu.buildFromTemplate(trayMenuTemplate(current, { loginItemSupported, version }, actions));
     tray.setToolTip(trayTooltip(current));
     // On macOS a context menu set with setContextMenu would open on left
     // click too and swallow the click event, so it is popped up by hand.

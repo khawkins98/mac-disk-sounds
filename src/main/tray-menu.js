@@ -5,11 +5,11 @@ import { SOUND_SETS } from './settings.js';
 
 /**
  * @param {object} settings current settings (see settings.js)
- * @param {{loginItemSupported: boolean}} options
- * @param {{setSettings(patch: object): void, openSettings(): void, quit(): void}} actions
+ * @param {{loginItemSupported: boolean, version: string}} options
+ * @param {{setSettings(patch: object): void, openSettings(): void, checkForUpdates(): void, quit(): void}} actions
  * @returns {object[]} an Electron menu template
  */
-export function trayMenuTemplate(settings, { loginItemSupported }, actions) {
+export function trayMenuTemplate(settings, { loginItemSupported, version }, actions) {
   const template = [
     {
       id: 'enabled',
@@ -43,6 +43,11 @@ export function trayMenuTemplate(settings, { loginItemSupported }, actions) {
     });
   }
   template.push(
+    { type: 'separator' },
+    // The app is not signed and does not update itself; this opens the
+    // latest release on GitHub.
+    { id: 'version', label: `Mac Disk Sounds v${version}`, enabled: false },
+    { id: 'check-for-updates', label: 'Check for Updates…', click: () => actions.checkForUpdates() },
     { type: 'separator' },
     { id: 'quit', label: 'Quit Mac Disk Sounds', click: () => actions.quit() }
   );
