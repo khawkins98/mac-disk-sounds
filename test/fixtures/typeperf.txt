@@ -1,0 +1,9 @@
+
+"(PDH-CSV 4.0)","\\DESKTOP-4F2K9QH\PhysicalDisk(_Total)\Disk Read Bytes/sec","\\DESKTOP-4F2K9QH\PhysicalDisk(_Total)\Disk Write Bytes/sec"
+"10/01/2026 09:15:01.123"," "," "
+"10/01/2026 09:15:02.125","0.000000","40960.351231"
+"10/01/2026 09:15:03.127","1048576.000000","524288.000000"
+"10/01/2026 09:15:04.129","0.000000","0.000000"
+
+Exiting, please wait...                 
+The command completed successfully.

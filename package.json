@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "lint": "eslint .",
     "build": "electron-builder -mwl",
     "build:mac": "electron-builder -m",
     "build:win": "electron-builder -w",
@@ -106,7 +108,10 @@
     "node": ">=22.12"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "electron": "^44.5.1",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "eslint": "^10.11.0",
+    "globals": "^17.13.0"
   }
 }

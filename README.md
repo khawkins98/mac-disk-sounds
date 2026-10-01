@@ -67,6 +67,10 @@ npm install
 # Start the app
 npm start
 
+# Run the tests and the linter
+npm test
+npm run lint
+
 # Build for your platform
 npm run build        # Builds for all platforms (macOS, Windows, Linux)
 npm run build:mac    # Builds for macOS only
