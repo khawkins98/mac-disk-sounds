@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn, execFile as nodeExecFile } from 'node:child_process';
 import { readFile as nodeReadFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import path from 'node:path';
@@ -10,7 +10,9 @@ import {
   parseIostatLine,
   parseTypeperfLine,
   parseCimDiskLine,
-  cimDiskRate
+  cimDiskRate,
+  parsePlistValues,
+  isDiskImageInfo
 } from './disk-parsers.js';
 
 // typeperf takes counter paths by their display names, which Windows
@@ -73,7 +75,9 @@ export function cleanRate(value) {
  *
  * Backends:
  * - linux: reads /proc/diskstats on a timer (no child processes).
- * - darwin: one long-lived `iostat -d -n 64 -w 1 -K`.
+ * - darwin: one long-lived `iostat -d -n 64 -w 1 -K`. Mounted disk images
+ *   are left out of the total (their I/O also shows on the disk holding the
+ *   image file); see findDiskImages.
  * - win32: one long-lived PowerShell reading the raw disk counters through
  *   CIM (CIM_DISK_SCRIPT), which works on any display language. If it has
  *   produced no sample after `windowsFallbackMs`, it is replaced for the
@@ -93,6 +97,8 @@ export class DiskMonitor extends EventEmitter {
     windowsBackend = 'auto',
     windowsFallbackMs = WINDOWS_FALLBACK_MS,
     env = process.env,
+    // Used on macOS to run diskutil (see findDiskImages).
+    execFile = nodeExecFile,
     // The restart delay doubles from `initial` to `max`, and goes back to
     // `initial` only after a process has stayed up for `stableMs`.
     backoffMs = { initial: 1000, max: 60000, stableMs: 10000 },
@@ -107,6 +113,7 @@ export class DiskMonitor extends EventEmitter {
     this.windowsBackend = windowsBackend;
     this.windowsFallbackMs = windowsFallbackMs;
     this.env = env;
+    this.execFile = execFile;
     this.backoffMs = { initial: 1000, max: 60000, stableMs: 10000, ...backoffMs };
     this.now = now;
     this.running = false;
@@ -125,7 +132,8 @@ export class DiskMonitor extends EventEmitter {
         this.backend = this.#startProcess({
           command: '/usr/sbin/iostat',
           args: ['-d', '-n', IOSTAT_MAX_DISKS, '-w', '1', '-K'],
-          makeLineHandler: (emit) => iostatLineHandler(emit)
+          makeLineHandler: (emit) => iostatLineHandler(emit, (names) =>
+            findDiskImages(names, { execFile: this.execFile, logger: this.logger }))
         });
         break;
       case 'win32':
@@ -352,11 +360,18 @@ export class DiskMonitor extends EventEmitter {
  * or slides into the visible set) iostat reprints the device line and the
  * next report counts a new disk's bytes since boot. Skip the data line after
  * any change of device line, which also covers the first one.
+ *
+ * `findExcluded(names)`, if given, is called once per change of the device
+ * set and resolves to the set of names not to count (disk images, see
+ * findDiskImages). Until it resolves, or if it fails, every disk counts.
  */
-export function iostatLineHandler(emit) {
+export function iostatLineHandler(emit, findExcluded = null) {
   let mbColumns = null;
   let devices = null;
+  let names = [];
+  let excluded = new Set();
   let skipNext = true;
+  let generation = 0;
   return (line) => {
     const parsed = parseIostatLine(line, mbColumns);
     switch (parsed.kind) {
@@ -364,7 +379,17 @@ export function iostatLineHandler(emit) {
         const key = parsed.names.join(' ');
         if (key !== devices) {
           devices = key;
+          names = parsed.names;
+          excluded = new Set();
           skipNext = true;
+          if (findExcluded) {
+            const current = ++generation;
+            Promise.resolve()
+              .then(() => findExcluded(parsed.names))
+              .then((found) => {
+                if (current === generation && found instanceof Set) excluded = found;
+              }, () => {});
+          }
         }
         break;
       }
@@ -374,12 +399,49 @@ export function iostatLineHandler(emit) {
       case 'data':
         if (skipNext) {
           skipNext = false;
+        } else if (excluded.size > 0 && parsed.deviceBps.length === names.length) {
+          const counted = parsed.deviceBps.filter((_, i) => !excluded.has(names[i]));
+          emit(null, null, counted.reduce((sum, bps) => sum + bps, 0));
         } else {
           emit(null, null, parsed.totalBps);
         }
         break;
     }
   };
+}
+
+/**
+ * Which of the iostat disk names are mounted disk images, by asking
+ * `diskutil info -plist` about each (in parallel, once per change of the
+ * device set). A disk diskutil cannot describe (an error, a timeout,
+ * unexpected output) is counted, so a failure here can only mean double
+ * counting, never missing activity.
+ * @param {string[]} names e.g. ['disk0', 'disk4']
+ * @returns {Promise<Set<string>>}
+ */
+export async function findDiskImages(names, { execFile = nodeExecFile, timeoutMs = 5000, logger = console } = {}) {
+  const results = await Promise.all(names.map((name) => new Promise((resolve) => {
+    if (!/^disk\d+$/.test(name)) {
+      resolve(false);
+      return;
+    }
+    try {
+      execFile('/usr/sbin/diskutil', ['info', '-plist', name], { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+        if (error) {
+          logger.log(`Cannot tell whether ${name} is a disk image (${error.message.trim()}); counting it.`);
+          resolve(false);
+          return;
+        }
+        resolve(isDiskImageInfo(parsePlistValues(String(stdout))));
+      });
+    } catch (error) {
+      logger.log(`Cannot run diskutil (${error.message}); counting every disk.`);
+      resolve(false);
+    }
+  })));
+  const images = new Set(names.filter((_, i) => results[i]));
+  if (images.size > 0) logger.log(`Not counting disk images (already counted on the disk holding them): ${[...images].join(', ')}`);
+  return images;
 }
 
 /**

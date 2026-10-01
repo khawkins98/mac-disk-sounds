@@ -8,6 +8,8 @@ import {
   parseIostatLine,
   parseTypeperfLine,
   parseCimDiskLine,
+  parsePlistValues,
+  isDiskImageInfo,
   cimDiskRate
 } from '../src/main/disk-parsers.js';
 
@@ -99,6 +101,39 @@ test('parseIostatLine follows a changed heading when a disk appears', () => {
   assert.deepEqual(header.mbColumns, [2, 5, 8]);
   const result = parseIostatLine('   1.00  1  1.00   1.00  1  2.00   1.00  1  3.00', header.mbColumns);
   assert.equal(result.totalBps, 6 * MIB);
+});
+
+test('parseIostatLine also gives the rate of each disk, in device-line order', () => {
+  const header = parseIostatLine('    KB/t  tps  MB/s     KB/t  tps  MB/s ', null);
+  const result = parseIostatLine('   64.00  120  7.50   512.00  80 40.00 ', header.mbColumns);
+  assert.deepEqual(result.deviceBps, [7.5 * MIB, 40 * MIB]);
+  assert.equal(result.totalBps, 47.5 * MIB);
+});
+
+test('parsePlistValues reads the simple values of diskutil info -plist', () => {
+  const disk0 = parsePlistValues(fixture('diskutil-info-disk0.plist'));
+  assert.equal(disk0.DeviceIdentifier, 'disk0');
+  assert.equal(disk0.BusProtocol, 'Apple Fabric');
+  assert.equal(disk0.VirtualOrPhysical, 'Physical');
+  assert.equal(disk0.Internal, true);
+  assert.equal(disk0.Removable, false);
+  assert.equal(disk0.Size, 500277792768);
+  assert.equal(disk0.BooterDeviceIdentifier, '');
+  assert.deepEqual(parsePlistValues('<key>A &amp; B</key><string>x &lt;y&gt;</string><key>E</key><string/>'), { 'A & B': 'x <y>', E: '' });
+  assert.deepEqual(parsePlistValues('not a plist'), {});
+  assert.deepEqual(parsePlistValues(''), {});
+});
+
+test('isDiskImageInfo: a mounted .dmg is a disk image, an internal SSD is not', () => {
+  assert.equal(isDiskImageInfo(parsePlistValues(fixture('diskutil-info-dmg.plist'))), true);
+  assert.equal(isDiskImageInfo(parsePlistValues(fixture('diskutil-info-disk0.plist'))), false);
+  // Without the protocol, a virtual disk with disk image media still is.
+  assert.equal(isDiskImageInfo({ VirtualOrPhysical: 'Virtual', MediaName: 'Apple UDIF read-write Media' }), true);
+  assert.equal(isDiskImageInfo({ VirtualOrPhysical: 'Virtual', MediaName: 'Disk Image' }), true);
+  // Other virtual disks (an APFS container, a RAID set) are not.
+  assert.equal(isDiskImageInfo({ VirtualOrPhysical: 'Virtual', BusProtocol: 'Apple Fabric', MediaName: 'AppleAPFSMedia' }), false);
+  assert.equal(isDiskImageInfo({ BusProtocol: 'USB', MediaName: 'Samsung T7' }), false);
+  assert.equal(isDiskImageInfo({}), false);
 });
 
 test('parseIostatLine ignores blank lines and error text', () => {

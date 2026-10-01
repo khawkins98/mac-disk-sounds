@@ -83,7 +83,7 @@ const MIB = 1024 * 1024;
  * @param {number[]|null} mbColumns indexes of the MB/s columns from the last
  *   heading line, or null if none has been seen yet
  * @returns {{kind: 'devices', names: string[]} | {kind: 'header', mbColumns: number[]} |
- *   {kind: 'data', totalBps: number} | {kind: 'other'}}
+ *   {kind: 'data', totalBps: number, deviceBps: number[]} | {kind: 'other'}}
  */
 export function parseIostatLine(line, mbColumns) {
   const tokens = line.trim().split(/\s+/).filter(Boolean);
@@ -109,11 +109,48 @@ export function parseIostatLine(line, mbColumns) {
 
   // Without a heading, assume the default KB/t tps MB/s triples.
   const columns = mbColumns ?? tokens.map((_, i) => i).filter((i) => i % 3 === 2);
-  let mbPerSecond = 0;
-  for (const i of columns) {
-    if (i < tokens.length) mbPerSecond += Number(tokens[i]);
+  // One rate per disk, in the order of the device line.
+  const deviceBps = columns.filter((i) => i < tokens.length).map((i) => Number(tokens[i]) * MIB);
+  const totalBps = deviceBps.reduce((sum, bps) => sum + bps, 0);
+  return { kind: 'data', totalBps, deviceBps };
+}
+
+const XML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+const decodeXml = (text) => text.replace(/&(amp|lt|gt|quot|apos);/g, (_, name) => XML_ENTITIES[name]);
+
+/**
+ * The simple values (string, integer, true, false) of an XML property list,
+ * by key. Nested dictionaries are flattened and the first occurrence of a
+ * key wins, which is enough for the top-level keys of `diskutil info
+ * -plist`. Anything unparseable gives {}.
+ * @param {string} xml
+ * @returns {Record<string, string|number|boolean>}
+ */
+export function parsePlistValues(xml) {
+  const values = {};
+  const re = /<key>([^<]*)<\/key>\s*(?:<(string|integer)>([^<]*)<\/\2>|<string\/>|<(true|false)\/>)/g;
+  for (const m of String(xml).matchAll(re)) {
+    const key = decodeXml(m[1]);
+    if (Object.hasOwn(values, key)) continue;
+    if (m[4]) values[key] = m[4] === 'true';
+    else if (m[2] === 'integer') values[key] = Number(m[3]);
+    else values[key] = decodeXml(m[3] ?? '');
   }
-  return { kind: 'data', totalBps: mbPerSecond * MIB };
+  return values;
+}
+
+/**
+ * Whether `diskutil info -plist diskN` describes a mounted disk image
+ * (.dmg, .sparseimage, ...). Reads from a disk image are also counted on
+ * the disk that holds the image file, so iostat would count them twice.
+ * diskutil reports a disk image's protocol as "Disk Image"; the media name
+ * of an image attached by hdiutil is "Apple UDIF ..." or "... Disk Image".
+ * @param {Record<string, string|number|boolean>} info from parsePlistValues
+ */
+export function isDiskImageInfo(info) {
+  if (info.BusProtocol === 'Disk Image') return true;
+  const media = typeof info.MediaName === 'string' ? info.MediaName : '';
+  return info.VirtualOrPhysical === 'Virtual' && /\b(?:UDIF|disk image)\b/i.test(media);
 }
 
 /** Parse one quoted CSV record as typeperf writes it. */

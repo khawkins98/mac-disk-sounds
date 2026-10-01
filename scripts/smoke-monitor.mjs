@@ -15,7 +15,8 @@
 // Exits non-zero on failure. Used by CI on each platform.
 
 import { DiskMonitor } from '../src/main/disk-monitor.js';
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn, execFileSync } from 'node:child_process';
+import { parsePlistValues } from '../src/main/disk-parsers.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,8 +29,12 @@ const MAX_FILE_BYTES = 256 * 1024 * 1024;
 
 const samples = [];
 const problems = [];
+const notes = [];
 const logger = {
-  log: (...args) => console.log('[monitor]', ...args),
+  log: (...args) => {
+    console.log('[monitor]', ...args);
+    notes.push(args.join(' '));
+  },
   warn: (...args) => {
     console.warn('[monitor warn]', ...args);
     problems.push(args.join(' '));
@@ -63,9 +68,15 @@ const spawn = (command, args, options) => {
   console.log(`[spawn] ${command} ${args.map((arg) => (/\s/.test(arg) ? `"${arg}"` : arg)).join(' ')}`);
   const child = nodeSpawn(command, args, options);
   child.stdout?.on('data', showRaw);
+  child.stdout?.on('data', (chunk) => {
+    if (diskImage && new RegExp(`\\b${diskImage}\\b`).test(String(chunk))) imageListed = true;
+  });
   child.stderr?.on('data', (chunk) => console.log(`[stderr] ${String(chunk).trimEnd()}`));
   return child;
 };
+// Set below on macOS: the attached disk image, and whether iostat listed it.
+let diskImage = null;
+let imageListed = false;
 let diskstatsShown = false;
 const readFile = async (...args) => {
   const text = await fs.readFile(...args);
@@ -86,8 +97,27 @@ monitor.on('sample', (sample) => {
   console.log(`sample ${samples.length}: read ${mb(sample.readBps)} MB/s, write ${mb(sample.writeBps)} MB/s, total ${mb(sample.totalBps)} MB/s`);
 });
 
-// Real disk I/O for the monitor to see: write and fsync a file over and over.
 const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mds-smoke-'));
+
+// macOS: attach a small disk image first. Its reads and writes also show
+// on the disk holding the image file, so the monitor must leave it out.
+if (process.platform === 'darwin') {
+  try {
+    const image = path.join(dir, 'smoke.dmg');
+    execFileSync('/usr/bin/hdiutil', ['create', '-quiet', '-size', '8m', '-fs', 'HFS+', '-volname', 'MDSSmoke', image]);
+    const attached = execFileSync('/usr/bin/hdiutil', ['attach', '-nobrowse', '-plist', image], { encoding: 'utf8' });
+    const device = attached.match(/<string>\/dev\/(disk\d+)<\/string>/)?.[1];
+    if (!device) throw new Error('no /dev/diskN in the hdiutil attach output');
+    diskImage = device;
+    const info = parsePlistValues(execFileSync('/usr/sbin/diskutil', ['info', '-plist', device], { encoding: 'utf8' }));
+    console.log(`[dmg] attached ${image} as ${device}: BusProtocol=${info.BusProtocol}, ` +
+      `VirtualOrPhysical=${info.VirtualOrPhysical}, MediaName=${info.MediaName}`);
+  } catch (error) {
+    console.log(`[dmg] could not attach a disk image, so that check is skipped: ${error.message}`);
+  }
+}
+
+// Real disk I/O for the monitor to see: write and fsync a file over and over.
 const file = path.join(dir, 'io.bin');
 let writing = true;
 async function generateIo() {
@@ -117,6 +147,13 @@ while (Date.now() - started < MAX_RUN_MS) {
 monitor.stop();
 writing = false;
 await io;
+if (diskImage) {
+  try {
+    execFileSync('/usr/bin/hdiutil', ['detach', '-quiet', '-force', `/dev/${diskImage}`]);
+  } catch (error) {
+    console.log(`[dmg] could not detach /dev/${diskImage}: ${error.message}`);
+  }
+}
 await fs.rm(dir, { recursive: true, force: true });
 
 const failures = [];
@@ -127,6 +164,10 @@ const bad = samples.filter((s) => !isRate(s.readBps) || !isRate(s.writeBps) || !
 if (bad.length > 0) failures.push(`samples with invalid numbers: ${JSON.stringify(bad)}`);
 if (samples.length >= MIN_SAMPLES && !samples.some((s) => s.totalBps > 0)) {
   failures.push('every sample reported 0 bytes/s while the script was writing to disk');
+}
+if (diskImage && !imageListed) console.log(`[dmg] iostat never listed ${diskImage}, so there was nothing to leave out.`);
+if (diskImage && imageListed && !notes.some((note) => /Not counting disk images/.test(note) && new RegExp(`\\b${diskImage}\\b`).test(note))) {
+  failures.push(`the attached disk image ${diskImage} was not recognised as one, so it would be counted twice`);
 }
 if (problems.length > 0) failures.push(`the monitor logged problems: ${problems.join(' | ')}`);
 

@@ -4,9 +4,24 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
-import { DiskMonitor, cleanRate, CIM_DISK_SCRIPT, POWERSHELL_ARGS } from '../src/main/disk-monitor.js';
+import { readFileSync } from 'node:fs';
+import { DiskMonitor, cleanRate, CIM_DISK_SCRIPT, POWERSHELL_ARGS, findDiskImages } from '../src/main/disk-monitor.js';
 
 const MIB = 1024 * 1024;
+const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
+
+// A stand-in for execFile('/usr/sbin/diskutil', ['info', '-plist', name]).
+// `disks` maps a disk name to plist text or an Error; unknown disks get the
+// internal SSD's plist.
+function fakeDiskutil(disks = {}) {
+  const calls = [];
+  const execFile = (command, args, _options, callback) => {
+    calls.push([command, ...args]);
+    const result = disks[args[2]] ?? fixture('diskutil-info-disk0.plist');
+    setImmediate(() => (result instanceof Error ? callback(result, '', '') : callback(null, result, '')));
+  };
+  return { execFile, calls };
+}
 
 const quietLogger = () => {
   const calls = [];
@@ -89,7 +104,7 @@ test('linux: a disk appearing starts a new baseline instead of a burst', async (
 
 test('darwin: one iostat process, skips the since-boot line, sums MB/s', async () => {
   const { spawn, children } = fakeSpawn();
-  const monitor = new DiskMonitor({ platform: 'darwin', spawn, logger: quietLogger() });
+  const monitor = new DiskMonitor({ platform: 'darwin', spawn, execFile: fakeDiskutil().execFile, logger: quietLogger() });
   const samples = [];
   monitor.on('sample', (s) => samples.push(s));
   monitor.start();
@@ -320,7 +335,7 @@ test('cleanRate turns NaN, negative and infinite rates into 0 and keeps null', (
 
 test('darwin: a change in the disk set skips the next report (no fake burst)', async () => {
   const { spawn, children } = fakeSpawn();
-  const monitor = new DiskMonitor({ platform: 'darwin', spawn, logger: quietLogger() });
+  const monitor = new DiskMonitor({ platform: 'darwin', spawn, execFile: fakeDiskutil().execFile, logger: quietLogger() });
   const samples = [];
   monitor.on('sample', (s) => samples.push(s.totalBps / (1024 * 1024)));
   monitor.start();
@@ -338,6 +353,74 @@ test('darwin: a change in the disk set skips the next report (no fake burst)', a
   await delay(5);
   monitor.stop();
   assert.deepEqual(samples, [1, 1.25, 2]);
+});
+
+test('darwin: a mounted disk image is not counted again, checked once per device-set change', async () => {
+  const { spawn, children } = fakeSpawn();
+  const diskutil = fakeDiskutil({ disk4: fixture('diskutil-info-dmg.plist') });
+  const logger = quietLogger();
+  const monitor = new DiskMonitor({ platform: 'darwin', spawn, execFile: diskutil.execFile, logger });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s.totalBps / MIB));
+  monitor.start();
+  const out = children[0].stdout;
+
+  out.write('              disk0               disk4 \n    KB/t  tps  MB/s     KB/t  tps  MB/s \n');
+  out.write('   21.89   38 50.00    18.00    0  0.00 \n'); // since boot: ignored
+  await delay(10);
+  assert.deepEqual(diskutil.calls, [
+    ['/usr/sbin/diskutil', 'info', '-plist', 'disk0'],
+    ['/usr/sbin/diskutil', 'info', '-plist', 'disk4']
+  ]);
+  // Reading 40 MB/s from the image is also 40 MB/s (compressed: less) on
+  // disk0, which holds the image file.
+  out.write('   64.00  640 40.00    64.00  640 40.00 \n');
+  // The same device line reprinted: no new diskutil calls.
+  out.write('              disk0               disk4 \n    KB/t  tps  MB/s     KB/t  tps  MB/s \n');
+  out.write('   16.00    3  1.00    16.00    3  1.00 \n');
+  await delay(10);
+  assert.equal(diskutil.calls.length, 2);
+
+  // The image is ejected: one disk left, checked again.
+  out.write('              disk0 \n    KB/t  tps  MB/s \n');
+  out.write('   16.00    3  9.00 \n'); // skipped after the change
+  out.write('   16.00    3  2.00 \n');
+  await delay(10);
+  assert.equal(diskutil.calls.length, 3);
+  monitor.stop();
+
+  assert.deepEqual(samples, [40, 1, 2]);
+  assert.ok(logger.calls.some(([level, text]) => level === 'log' && /Not counting disk images.*disk4/.test(text)));
+  assert.ok(logger.calls.every(([level]) => level === 'log'), 'nothing above log level');
+});
+
+test('darwin: if diskutil fails, every disk is counted', async () => {
+  const { spawn, children } = fakeSpawn();
+  const diskutil = fakeDiskutil({ disk0: new Error('diskutil: timed out'), disk4: new Error('ENOENT') });
+  const monitor = new DiskMonitor({ platform: 'darwin', spawn, execFile: diskutil.execFile, logger: quietLogger() });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s.totalBps / MIB));
+  monitor.start();
+  const out = children[0].stdout;
+  out.write('              disk0               disk4 \n    KB/t  tps  MB/s     KB/t  tps  MB/s \n   1 1 1.00 1 1 1.00 \n');
+  await delay(10);
+  out.write('   64.00  640 40.00    64.00  640 40.00 \n');
+  await delay(5);
+  monitor.stop();
+  assert.deepEqual(samples, [80]);
+});
+
+test('findDiskImages: only diskN names are asked about, and a throwing execFile counts everything', async () => {
+  const diskutil = fakeDiskutil({ disk5: fixture('diskutil-info-dmg.plist') });
+  const logger = quietLogger();
+  const found = await findDiskImages(['disk0', 'disk5', 'cd0', 'disk2s1'], { execFile: diskutil.execFile, logger });
+  assert.deepEqual([...found], ['disk5']);
+  assert.deepEqual(diskutil.calls.map((call) => call.at(-1)), ['disk0', 'disk5']);
+
+  const throwing = () => {
+    throw new Error('spawn EAGAIN');
+  };
+  assert.deepEqual([...await findDiskImages(['disk0', 'disk4'], { execFile: throwing, logger })], []);
 });
 
 test('unsupported platforms emit nothing and log once', async () => {
