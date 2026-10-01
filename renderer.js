@@ -239,27 +239,31 @@ const formatBytes = (bytes) => {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 };
 
+// Combined read+write throughput below which the disk counts as idle.
+// Background housekeeping (logs, caches) rarely exceeds this, so an idle
+// machine stays silent.
+const ACTIVITY_THRESHOLD_BPS = 64 * 1024;
+
 // Handle disk activity
 let isPlaying = false;
 ipcRenderer.on('disk-activity', (event, data) => {
-  console.log('Disk activity detected:', data, event);
-  // Default to read operation if type not specified
-  const type = data?.type || 'read';
-  // Default to a moderate speed if not specified
-  const speed = data?.speed || 11; // 512KB/s default
+  const readBps = data?.readBps ?? 0;
+  const writeBps = data?.writeBps ?? 0;
+  const speed = readBps + writeBps;
 
-  console.log('Disk activity detected:', type, speed);
+  // Silence means silence: no click unless the disk is actually busy.
+  if (speed < ACTIVITY_THRESHOLD_BPS) return;
+
+  const type = readBps >= writeBps ? 'read' : 'write';
 
   // Update speed display
-  const speedText = formatBytes(speed);
-  diskSpeed.textContent = `${type === 'read' ? 'write' : 'read'} ${speedText}`;
+  diskSpeed.textContent = `${type} ${formatBytes(speed)}`;
 
   if (!isPlaying) {
     isPlaying = true;
     playSound();
 
     // Calculate activity level based on speed
-    // Assuming typical SSD speeds max around 2GB/s
     const maxSpeed = .1 * 1024 * 1024 * 1024; // 100MB/s in bytes
     const activityLevel = Math.min(speed / maxSpeed + 0.2, 1);
     updateActivityIndicators(activityLevel);

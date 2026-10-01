@@ -10,15 +10,27 @@ const __dirname = path.dirname(__filename);
 
 let mainWindow = null;
 let diskMonitorInterval = null;
+let fsStatsUnavailableLogged = false;
 
 async function monitorDiskIO() {
   try {
     const fsStats = await si.fsStats();
-    if (mainWindow) {
-      // Send both read and write speeds
+
+    // systeminformation returns null on platforms it does not support
+    // (notably Windows). Log that once rather than on every tick.
+    if (!fsStats) {
+      if (!fsStatsUnavailableLogged) {
+        fsStatsUnavailableLogged = true;
+        console.warn(`Disk I/O statistics are not available on ${process.platform}; no disk sounds will play.`);
+      }
+      return;
+    }
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      // The first sample after start has null rates; treat them as 0.
       mainWindow.webContents.send('disk-activity', {
-        type: fsStats.rx_sec > fsStats.wx_sec ? 'read' : 'write',
-        speed: Math.max(fsStats.rx_sec, fsStats.wx_sec)
+        readBps: fsStats.rx_sec ?? 0,
+        writeBps: fsStats.wx_sec ?? 0
       });
     }
   } catch (error) {
