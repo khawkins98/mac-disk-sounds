@@ -50,37 +50,56 @@ const QUERIES = [
 
 /**
  * Whether a StatusNotifierItem host is running on this Linux session.
- * Tries gdbus, then dbus-send; each gets `timeoutMs`.
+ * Asks with gdbus and dbus-send at the same time and takes the first
+ * answer; the whole check takes at most `timeoutMs`.
  * @returns {Promise<boolean>} false when there is no session bus or the
- *   question could not be answered
+ *   question could not be answered in time
  */
-export async function hasStatusNotifierHost({ env = process.env, execFile = nodeExecFile, exists = fs.existsSync, timeoutMs = 3000 } = {}) {
+export function hasStatusNotifierHost({ env = process.env, execFile = nodeExecFile, exists = fs.existsSync, timeoutMs = 3000 } = {}) {
   const address = sessionBusAddress(env, exists);
-  if (!address) return false;
+  if (!address) return Promise.resolve(false);
   const childEnv = { ...env, DBUS_SESSION_BUS_ADDRESS: address };
-  for (const [command, args] of QUERIES) {
-    const answer = await new Promise((resolve) => {
+  return new Promise((resolve) => {
+    let pending = QUERIES.length;
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    let done = false;
+    function finish(answer) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(answer);
+    }
+    const settle = (answer) => {
+      if (answer !== null) finish(answer);
+      else if (--pending === 0) finish(false);
+    };
+    for (const [command, args] of QUERIES) {
       try {
         execFile(command, args, { env: childEnv, timeout: timeoutMs }, (error, stdout) => {
-          resolve(error ? null : parseNameHasOwnerReply(stdout));
+          settle(error ? null : parseNameHasOwnerReply(stdout));
         });
       } catch {
-        resolve(null);
+        settle(null);
       }
-    });
-    if (answer !== null) return answer;
-  }
-  return false;
+    }
+  });
 }
 
 /**
  * What the app does about a missing tray.
- * @param {{platform: string, trayCreated: boolean, hasHost: boolean|null}} facts
+ * @param {{platform: string, trayCreated: boolean, hasHost: boolean|null, openedAtLogin?: boolean}} facts
  *   hasHost: the result of hasStatusNotifierHost (Linux), or null if not
  *   checked (other platforms always have a tray area)
- * @returns {{trayMissing: boolean}} when trayMissing, the settings window
- *   says so, offers Quit, and closing it minimises it instead
+ * @returns {{trayMissing: boolean, startWindow: 'shown'|'minimized'|'none'}}
+ *   When trayMissing, the settings window says so, offers Quit, and
+ *   closing it minimises it instead. startWindow is how the settings
+ *   window starts: shown when started by hand; at login, nothing if the
+ *   tray icon is there, otherwise minimised, so the running app can be
+ *   found in the taskbar.
  */
-export function trayFallback({ platform, trayCreated, hasHost }) {
-  return { trayMissing: !trayCreated || (platform === 'linux' && hasHost === false) };
+export function trayFallback({ platform, trayCreated, hasHost, openedAtLogin = false }) {
+  const trayMissing = !trayCreated || (platform === 'linux' && hasHost === false);
+  let startWindow = 'shown';
+  if (openedAtLogin) startWindow = trayMissing ? 'minimized' : 'none';
+  return { trayMissing, startWindow };
 }

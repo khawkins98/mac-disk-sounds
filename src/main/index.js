@@ -288,11 +288,15 @@ function createAudioWindow() {
   win.loadFile(AUDIO_PAGE).catch((error) => console.error('Cannot load the audio window:', error));
 }
 
-function createSettingsWindow() {
+const settingsHeight = () => SETTINGS_SIZE.height + (trayMissing ? SETTINGS_SIZE.noTrayExtra : 0);
+
+// `minimized`: start in the taskbar rather than on screen (a login start
+// with no tray icon).
+function createSettingsWindow({ minimized = false } = {}) {
   // https://www.electronjs.org/docs/latest/tutorial/custom-window-styles#limitations
   const win = new BrowserWindow({
     width: SETTINGS_SIZE.width,
-    height: SETTINGS_SIZE.height + (trayMissing ? SETTINGS_SIZE.noTrayExtra : 0),
+    height: settingsHeight(),
     show: false,
     frame: false,
     resizable: false,
@@ -320,6 +324,11 @@ function createSettingsWindow() {
   });
   win.webContents.on('did-finish-load', catchUp);
   win.once('ready-to-show', () => {
+    if (minimized) {
+      win.showInactive();
+      win.minimize();
+      return;
+    }
     win.show();
     // With no Dock icon, macOS does not bring a new window forward on its own.
     if (IS_MAC) {
@@ -348,6 +357,21 @@ function createSettingsWindow() {
   });
 
   win.loadFile(SETTINGS_PAGE).catch((error) => console.error('Cannot load the settings window:', error));
+}
+
+// The tray check finished: bring a window that is already open into line
+// (it may have been opened, e.g. by a second launch, before the answer).
+function applyTrayMissing(missing) {
+  trayMissing = missing;
+  if (!isLive(settingsWindow)) return;
+  const [width, height] = settingsWindow.getSize();
+  if (width !== SETTINGS_SIZE.width || height !== settingsHeight()) {
+    // A window that is not resizable may refuse a new size on Linux.
+    settingsWindow.setResizable(true);
+    settingsWindow.setSize(SETTINGS_SIZE.width, settingsHeight());
+    settingsWindow.setResizable(false);
+  }
+  sendTo(settingsWindow, 'tray-status', { missing });
 }
 
 function showSettingsWindow() {
@@ -544,15 +568,25 @@ if (!app.requestSingleInstanceLock()) {
     // On Linux the icon only shows if a StatusNotifierItem host is running.
     // Find out before showing the window, so it can be sized for the note.
     const hasHost = tray && process.platform === 'linux' ? await hasStatusNotifierHost() : null;
-    trayMissing = trayFallback({ platform: process.platform, trayCreated: tray !== null, hasHost }).trayMissing;
-    if (trayMissing) {
+    const { trayMissing: missing, startWindow } = trayFallback({
+      platform: process.platform,
+      trayCreated: tray !== null,
+      hasHost,
+      openedAtLogin: wasOpenedAtLogin({ app })
+    });
+    applyTrayMissing(missing);
+    if (missing) {
       console.warn('No system tray to show the icon in: closing the settings window will minimise it.');
     }
 
     // Started by hand: show the window so it is clear the app is running.
-    // Started at login: stay in the tray (or, with no tray, out of sight:
-    // starting the app again shows the window).
-    if (!wasOpenedAtLogin({ app })) showSettingsWindow();
+    // Started at login: stay in the tray, or with no tray, start minimised
+    // so the app can be found in the taskbar.
+    if (startWindow === 'shown') {
+      showSettingsWindow();
+    } else if (startWindow === 'minimized' && !isLive(settingsWindow)) {
+      createSettingsWindow({ minimized: true });
+    }
   });
 
   // The app lives in the tray: closing windows never quits it. Having this

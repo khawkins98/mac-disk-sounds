@@ -45,19 +45,33 @@ function fakeExecFile(replies) {
   return { execFile, calls };
 }
 
-test('hasStatusNotifierHost asks the session bus about the watcher with gdbus', async () => {
-  const { execFile, calls } = fakeExecFile({ gdbus: GDBUS_TRUE });
+test('hasStatusNotifierHost asks the session bus about the watcher with gdbus and dbus-send at once', async () => {
+  const { execFile, calls } = fakeExecFile({ gdbus: GDBUS_TRUE, 'dbus-send': DBUS_SEND_TRUE });
   const env = { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus', DISPLAY: ':0' };
   assert.equal(await hasStatusNotifierHost({ env, execFile }), true);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].command, 'gdbus');
+  assert.deepEqual(calls.map((c) => c.command), ['gdbus', 'dbus-send']);
   assert.equal(calls[0].args.at(-1), WATCHER_NAME);
   assert.ok(calls[0].args.includes('org.freedesktop.DBus.NameHasOwner'));
   assert.equal(calls[0].env.DBUS_SESSION_BUS_ADDRESS, 'unix:path=/run/user/1000/bus');
   assert.ok(calls[0].timeout > 0);
 });
 
-test('hasStatusNotifierHost falls back to dbus-send when gdbus is missing', async () => {
+test('hasStatusNotifierHost takes the first real answer, and stays within one time budget', async () => {
+  // gdbus never answers; dbus-send does.
+  const hanging = (command, args, options, callback) => {
+    if (command === 'dbus-send') setTimeout(() => callback(null, DBUS_SEND_TRUE, ''), 10);
+  };
+  const env = { DBUS_SESSION_BUS_ADDRESS: 'x' };
+  assert.equal(await hasStatusNotifierHost({ env, execFile: hanging, timeoutMs: 1000 }), true);
+  // Neither answers: false once the budget is spent, not budget x 2.
+  const silent = () => {};
+  const started = Date.now();
+  assert.equal(await hasStatusNotifierHost({ env, execFile: silent, timeoutMs: 80 }), false);
+  const took = Date.now() - started;
+  assert.ok(took >= 70 && took < 150, `took ${took} ms`);
+});
+
+test('hasStatusNotifierHost uses dbus-send when gdbus is missing', async () => {
   const missing = Object.assign(new Error('spawn gdbus ENOENT'), { code: 'ENOENT' });
   const { execFile, calls } = fakeExecFile({ gdbus: missing, 'dbus-send': DBUS_SEND_FALSE });
   assert.equal(await hasStatusNotifierHost({ env: { DBUS_SESSION_BUS_ADDRESS: 'unix:abstract=x' }, execFile }), false);
@@ -80,11 +94,25 @@ test('hasStatusNotifierHost: no session bus, or no answer, means no host', async
 });
 
 test('trayFallback: the tray counts as missing only on Linux without a host, or if it could not be created', () => {
-  assert.deepEqual(trayFallback({ platform: 'linux', trayCreated: true, hasHost: true }), { trayMissing: false });
-  assert.deepEqual(trayFallback({ platform: 'linux', trayCreated: true, hasHost: false }), { trayMissing: true });
-  assert.deepEqual(trayFallback({ platform: 'linux', trayCreated: false, hasHost: null }), { trayMissing: true });
+  const missing = (facts) => trayFallback(facts).trayMissing;
+  assert.equal(missing({ platform: 'linux', trayCreated: true, hasHost: true }), false);
+  assert.equal(missing({ platform: 'linux', trayCreated: true, hasHost: false }), true);
+  assert.equal(missing({ platform: 'linux', trayCreated: false, hasHost: null }), true);
   for (const platform of ['darwin', 'win32']) {
-    assert.deepEqual(trayFallback({ platform, trayCreated: true, hasHost: null }), { trayMissing: false });
-    assert.deepEqual(trayFallback({ platform, trayCreated: false, hasHost: null }), { trayMissing: true });
+    assert.equal(missing({ platform, trayCreated: true, hasHost: null }), false);
+    assert.equal(missing({ platform, trayCreated: false, hasHost: null }), true);
   }
+});
+
+test('trayFallback: how the settings window starts', () => {
+  const start = (facts) => trayFallback({ platform: 'linux', trayCreated: true, ...facts }).startWindow;
+  // Started by hand: always shown.
+  assert.equal(start({ hasHost: true, openedAtLogin: false }), 'shown');
+  assert.equal(start({ hasHost: false, openedAtLogin: false }), 'shown');
+  // At login: out of sight in the tray, or minimised to the taskbar when
+  // there is no tray, so the app is never running with no way in.
+  assert.equal(start({ hasHost: true, openedAtLogin: true }), 'none');
+  assert.equal(start({ hasHost: false, openedAtLogin: true }), 'minimized');
+  assert.equal(trayFallback({ platform: 'win32', trayCreated: false, hasHost: null, openedAtLogin: true }).startWindow, 'minimized');
+  assert.equal(trayFallback({ platform: 'darwin', trayCreated: true, hasHost: null, openedAtLogin: true }).startWindow, 'none');
 });
