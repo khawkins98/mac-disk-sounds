@@ -71,7 +71,7 @@ Mac Disk Sounds runs from the menu bar (macOS) or the system tray (Windows and L
 - The version you are running, and **Check for Updates…**, which opens the latest release on GitHub in your browser (the app does not update itself).
 - **Quit**.
 
-Clicking the icon opens or closes the settings window (on Linux most trays only show the menu, so use **Open Settings…**). Closing the window keeps the sounds going; only **Quit** stops the app. Starting the app by hand opens the settings window; starting at login does not. Settings are saved as `settings.json` in the app's user data folder. On Linux, Launch at Login writes `~/.config/autostart/mac-disk-sounds.desktop`.
+Clicking the icon opens the settings window, brings it to the front if other windows cover it, or closes it if it is already in front (on Linux most trays only show the menu, so use **Open Settings…**). Closing the window keeps the sounds going; only **Quit** stops the app. Starting the app by hand opens the settings window; starting at login does not. Settings are saved as `settings.json` in the app's user data folder. On Linux, Launch at Login writes `~/.config/autostart/mac-disk-sounds.desktop`.
 
 On Linux the tray icon needs a StatusNotifierItem host (KDE, XFCE, Cinnamon, MATE and Ubuntu have one; stock GNOME needs the AppIndicator extension). If the app finds none at startup, the settings window says so and has a **Quit** button, and closing the window minimises it instead, so the app cannot end up running with no way back to it. Started at login with no tray, the app stays out of sight; start it again to show the window.
 

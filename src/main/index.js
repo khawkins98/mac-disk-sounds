@@ -16,6 +16,7 @@ import { SettingsStore, sanitizePatch } from './settings.js';
 import { HIDDEN_ARG, createLoginItem, wasOpenedAtLogin } from './login-item.js';
 import { createTray } from './tray.js';
 import { hasStatusNotifierHost, trayFallback } from './tray-host.js';
+import { trayClickAction } from './tray-click.js';
 
 // ES Module path resolution
 const __filename = fileURLToPath(import.meta.url);
@@ -78,6 +79,8 @@ let modemPlaying = false;
 // No tray icon can be seen (see tray-host.js): the settings window is then
 // the only way in, so closing it minimises it, and it offers Quit.
 let trayMissing = false;
+// When the settings window last lost the focus (performance.now()).
+let settingsBlurredAt = -Infinity;
 const activity = new ActivityModel();
 
 const isLive = (win) => Boolean(win && !win.isDestroyed());
@@ -312,6 +315,9 @@ function createSettingsWindow() {
   };
   win.on('show', catchUp);
   win.on('restore', catchUp);
+  win.on('blur', () => {
+    if (settingsWindow === win) settingsBlurredAt = performance.now();
+  });
   win.webContents.on('did-finish-load', catchUp);
   win.once('ready-to-show', () => {
     win.show();
@@ -356,8 +362,15 @@ function showSettingsWindow() {
   if (IS_MAC) app.focus({ steal: true });
 }
 
+// A tray icon click: close the window if the user is looking at it,
+// otherwise bring it up (see trayClickAction).
 function toggleSettingsWindow() {
-  if (settingsVisible()) {
+  const action = trayClickAction({
+    visible: settingsVisible(),
+    focused: settingsVisible() && settingsWindow.isFocused(),
+    msSinceBlur: performance.now() - settingsBlurredAt
+  });
+  if (action === 'hide') {
     settingsWindow.close();
   } else {
     showSettingsWindow();
