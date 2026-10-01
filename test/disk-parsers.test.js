@@ -28,6 +28,22 @@ test('parseDiskstats ignores partitions, loop, ram, dm, zram and optical drives'
   assert.deepEqual(parseDiskstats(text), { readBytes: 0, writeBytes: 0, devices: [] });
 });
 
+test('parseDiskstats counts legacy IDE (hd*) and User-mode Linux (ubd*) disks, not their partitions', () => {
+  const text = [
+    '   3       0 hda 5000 0 80000 900 200 0 1600 40 0 600 940 0 0 0 0 0 0',
+    '   3       1 hda1 4990 0 79900 899 200 0 1600 40 0 600 939 0 0 0 0 0 0',
+    '   3      64 hdb 10 0 160 2 0 0 0 0 0 2 2 0 0 0 0 0 0',
+    '  98       0 ubda 700 0 11200 50 30 0 240 3 0 40 53 0 0 0 0 0 0',
+    '  98       1 ubda1 690 0 11000 49 30 0 240 3 0 40 52 0 0 0 0 0 0',
+    '  98      16 ubdb 1 0 8 0 1 0 8 0 0 0 0 0 0 0 0 0 0',
+    '  98      17 ubdb2 1 0 8 0 1 0 8 0 0 0 0 0 0 0 0 0 0'
+  ].join('\n');
+  const { devices, readBytes, writeBytes } = parseDiskstats(text);
+  assert.deepEqual(devices, ['hda', 'hdb', 'ubda', 'ubdb']);
+  assert.equal(readBytes, (80000 + 160 + 11200 + 8) * 512);
+  assert.equal(writeBytes, (1600 + 0 + 240 + 8) * 512);
+});
+
 test('parseDiskstats tolerates empty and malformed input', () => {
   assert.deepEqual(parseDiskstats(''), { readBytes: 0, writeBytes: 0, devices: [] });
   assert.deepEqual(parseDiskstats('8 0 sda x y z\n'), { readBytes: 0, writeBytes: 0, devices: [] });

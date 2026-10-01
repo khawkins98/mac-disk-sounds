@@ -6,10 +6,12 @@
 // real sector size.
 const SECTOR_BYTES = 512;
 
-// Whole-disk devices only. Partitions (sda1, nvme0n1p1, mmcblk0p1), loop,
-// ram, device-mapper (dm-*) and zram devices are excluded so the same I/O is
-// not counted twice and virtual devices are ignored.
-const WHOLE_DISK = /^(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme\d+n\d+|mmcblk\d+)$/;
+// Whole-disk devices only: SCSI/SATA/USB (sda), virtio (vda), Xen (xvda),
+// NVMe (nvme0n1), SD/eMMC (mmcblk0), legacy IDE (hda) and User-mode Linux
+// (ubda). Partitions (sda1, hda1, ubda1, nvme0n1p1, mmcblk0p1), loop, ram,
+// device-mapper (dm-*) and zram devices are excluded so the same I/O is not
+// counted twice and virtual devices are ignored.
+const WHOLE_DISK = /^(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|ubd[a-z]+|nvme\d+n\d+|mmcblk\d+)$/;
 
 /**
  * Sum bytes read and written across whole-disk devices in /proc/diskstats.
