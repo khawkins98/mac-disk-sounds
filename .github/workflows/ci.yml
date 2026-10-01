@@ -30,7 +30,18 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           node --check main.js
+          node --check activity.js
+          node --check disk-monitor.js
+          node --check disk-parsers.js
+          node --check preload.cjs
           node --check renderer.js
+          node --check audio.js
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
 
       - name: Package (Linux, unpacked)
         run: npx electron-builder --dir -l --publish never

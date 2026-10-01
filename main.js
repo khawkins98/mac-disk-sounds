@@ -1,39 +1,79 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import si from 'systeminformation';
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
+import path from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { DiskMonitor } from './disk-monitor.js';
+import { ActivityModel } from './activity.js';
 
 // ES Module path resolution
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Compare file URL paths decoded, and case-insensitively where the file
+// system usually is, so encoding differences between Node and Chromium
+// cannot lock our own page out.
+const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
+function normaliseFilePath(url) {
+  const decoded = decodeURIComponent(url.pathname);
+  return CASE_INSENSITIVE_FS ? decoded.toLowerCase() : decoded;
+}
+const INDEX_PATH = normaliseFilePath(pathToFileURL(path.join(__dirname, 'index.html')));
+
+// Hosts the page links to (index.html). Anything else is refused.
+const EXTERNAL_HOSTS = new Set(['github.com', 'pixabay.com']);
+const WINDOW_COMMANDS = new Set(['close', 'minimize']);
+
 let mainWindow = null;
-let diskMonitorInterval = null;
-let fsStatsUnavailableLogged = false;
+let monitor = null;
+const activity = new ActivityModel();
 
-async function monitorDiskIO() {
+function sendActivity(state) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('activity', state);
+  }
+}
+
+function startMonitor() {
+  if (monitor) return;
+  // DiskMonitor stamps samples with performance.now(); use the same clock.
+  activity.reset(performance.now());
+  monitor = new DiskMonitor();
+  monitor.on('sample', (sample) => {
+    const changed = activity.update(sample);
+    if (changed) sendActivity(changed);
+  });
+  monitor.start();
+}
+
+function stopMonitor() {
+  if (!monitor) return;
+  monitor.stop();
+  monitor.removeAllListeners();
+  monitor = null;
+}
+
+// Only our own page, in our own window, may use the IPC channels.
+function isTrustedSender(event) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return false;
+  const frameUrl = event.senderFrame?.url;
+  if (!frameUrl) return false;
   try {
-    const fsStats = await si.fsStats();
+    const url = new URL(frameUrl);
+    return url.protocol === 'file:' && normaliseFilePath(url) === INDEX_PATH;
+  } catch {
+    return false;
+  }
+}
 
-    // systeminformation returns null on platforms it does not support
-    // (notably Windows). Log that once rather than on every tick.
-    if (!fsStats) {
-      if (!fsStatsUnavailableLogged) {
-        fsStatsUnavailableLogged = true;
-        console.warn(`Disk I/O statistics are not available on ${process.platform}; no disk sounds will play.`);
-      }
-      return;
-    }
-
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      // The first sample after start has null rates; treat them as 0.
-      mainWindow.webContents.send('disk-activity', {
-        readBps: fsStats.rx_sec ?? 0,
-        writeBps: fsStats.wx_sec ?? 0
-      });
-    }
-  } catch (error) {
-    console.error('Error monitoring disk I/O:', error);
+// Returns the normalised URL if it may be opened, otherwise null.
+function allowedExternalUrl(value) {
+  try {
+    const url = new URL(value);
+    const allowed = url.protocol === 'https:' && EXTERNAL_HOSTS.has(url.hostname) &&
+      url.port === '' && url.username === '' && url.password === '';
+    return allowed ? url.href : null;
+  } catch {
+    return null;
   }
 }
 
@@ -46,81 +86,88 @@ async function createWindow() {
     transparent: true,
     backgroundColor: '#ffffff',
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
       spellcheck: false,
-      backgroundThrottling: true
+      // The window hosts the audio; keep timers and audio scheduling running
+      // when it is hidden or occluded.
+      backgroundThrottling: false,
+      autoplayPolicy: 'no-user-gesture-required'
     },
     icon: path.join(__dirname, 'icon.iconset', 'icon_256x256.png')
   });
 
-  await mainWindow.loadFile('index.html');
+  const { webContents } = mainWindow;
 
-  // Start disk I/O monitoring
-  diskMonitorInterval = setInterval(monitorDiskIO, 1000); // Check every second
+  // The page never navigates or opens windows; links go through openExternal.
+  webContents.on('will-navigate', (event) => event.preventDefault());
+  webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  webContents.on('will-attach-webview', (event) => event.preventDefault());
 
-  // Handle window focus events
-  mainWindow.on('focus', () => {
-    mainWindow.webContents.send('window-focus-change', true);
+  // A reload (or the first load) starts from idle; resend the current state.
+  webContents.on('did-finish-load', () => {
+    if (activity.state.active) sendActivity(activity.state);
   });
 
-  mainWindow.on('blur', () => {
-    mainWindow.webContents.send('window-focus-change', false);
-  });
-
-  // Optimize memory usage
-  mainWindow.webContents.setBackgroundThrottling(true);
-
-  // Clean up when window is closed
   mainWindow.on('closed', () => {
-    if (diskMonitorInterval) {
-      clearInterval(diskMonitorInterval);
-      diskMonitorInterval = null;
-    }
+    stopMonitor();
     mainWindow = null;
   });
+
+  await mainWindow.loadFile('index.html');
+
+  // The window may have been closed while it was loading.
+  if (mainWindow) startMonitor();
 }
 
-// Handle window control messages
 ipcMain.on('window-control', (event, command) => {
-  if (!mainWindow) return;
-
-  switch (command) {
-    case 'close':
-      if (diskMonitorInterval) {
-        clearInterval(diskMonitorInterval);
-        diskMonitorInterval = null;
-      }
-      mainWindow.close();
-      break;
-    case 'minimize':
-      mainWindow.minimize();
-      break;
+  if (!isTrustedSender(event) || !WINDOW_COMMANDS.has(command)) return;
+  if (command === 'close') {
+    mainWindow.close();
+  } else {
+    mainWindow.minimize();
   }
 });
 
-// Optimize app lifecycle
-app.whenReady().then(createWindow);
-
-app.on('window-all-closed', () => {
-  if (diskMonitorInterval) {
-    clearInterval(diskMonitorInterval);
-    diskMonitorInterval = null;
+ipcMain.on('open-external', (event, url) => {
+  if (!isTrustedSender(event)) return;
+  const href = allowedExternalUrl(url);
+  if (!href) {
+    console.warn('Refusing to open external URL:', url);
+    return;
   }
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  shell.openExternal(href);
 });
 
-app.on('activate', () => {
-  if (!mainWindow) {
-    createWindow();
-  }
-});
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  });
 
-app.on('before-quit', () => {
-  if (diskMonitorInterval) {
-    clearInterval(diskMonitorInterval);
-    diskMonitorInterval = null;
-  }
-});
+  app.whenReady().then(() => {
+    // The page needs no permissions (audio output is not one).
+    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    return createWindow();
+  });
+
+  app.on('window-all-closed', () => {
+    stopMonitor();
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
+  });
+
+  app.on('activate', () => {
+    if (!mainWindow) {
+      createWindow();
+    }
+  });
+
+  app.on('before-quit', stopMonitor);
+}

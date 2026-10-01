@@ -17,7 +17,7 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 - 💻 Works in the background while you do actual work
 - 🤓 Perfect for confusing your coworkers
 - 🎮 Hidden surprises for the curious (hint: some dots like to be clicked...)
-- 🪟 Cross-platform: Runs on macOS, Windows, and Linux (disk activity detection on Windows is coming soon; for now it stays quiet there)
+- 🪟 Cross-platform: Linux is tested; disk activity detection on macOS and Windows is new and not yet tested on real machines, and on Windows it currently needs English performance counter names (an English-language Windows install)
 - 🏋️ Dozens or hundreds of MBs to download and make your SSD workout! Thanks Electron!
 
 ## Installation 🚀
@@ -66,6 +66,10 @@ npm install
 
 # Start the app
 npm start
+
+# Run the tests and the linter
+npm test
+npm run lint
 
 # Build for your platform
 npm run build        # Builds for all platforms (macOS, Windows, Linux)
