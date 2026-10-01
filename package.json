@@ -19,7 +19,7 @@
       "provider": "github",
       "owner": "khawkins98",
       "repo": "mac-disk-sounds",
-      "releaseType": "release"
+      "releaseType": "draft"
     },
     "files": [
       "package.json",
@@ -91,6 +91,11 @@
     "retro"
   ],
   "author": "Ken Hawkins",
+  "homepage": "https://github.com/khawkins98/mac-disk-sounds",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khawkins98/mac-disk-sounds.git"
+  },
   "license": "MIT",
   "engines": {
     "node": ">=22.12"
