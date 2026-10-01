@@ -31,9 +31,6 @@
       "build/icon.png"
     ],
     "asar": true,
-    "asarUnpack": [
-      "assets/sounds/*.mp3"
-    ],
     "mac": {
       "category": "public.app-category.utilities",
       "extendInfo": {
