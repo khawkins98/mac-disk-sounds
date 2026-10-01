@@ -105,4 +105,11 @@ jobs:
           archs=$(lipo -archs "dist/mac-universal/Mac Disk Sounds.app/Contents/MacOS/Mac Disk Sounds")
           echo "Architectures: $archs"
           [[ " $archs " == *" x86_64 "* && " $archs " == *" arm64 "* ]]
+          test -f "dist/mac-universal/Mac Disk Sounds.app/Contents/Resources/icon.icns"
           ls -l dist/*.dmg dist/*.zip
+
+      # PR builds are unsigned; report the signature state without failing,
+      # so a broken merge shows up here before users hit it on Apple silicon.
+      - name: Report code signature (informational)
+        continue-on-error: true
+        run: codesign --verify --deep --strict --verbose=2 "dist/mac-universal/Mac Disk Sounds.app"

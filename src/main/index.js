@@ -47,7 +47,8 @@ const PAGE_PATHS = {
 const EXTERNAL_HOSTS = new Set(['github.com', 'pixabay.com']);
 // The app is unsigned and does not update itself: "Check for Updates…"
 // opens the latest release in the browser.
-const RELEASES_URL = 'https://github.com/khawkins98/mac-disk-sounds/releases/latest';
+// Not /releases/latest: that skips pre-releases, and every alpha is published as one.
+const RELEASES_URL = 'https://github.com/khawkins98/mac-disk-sounds/releases';
 const WINDOW_COMMANDS = new Set(['close', 'minimize']);
 
 // Settings the tray menu shows.

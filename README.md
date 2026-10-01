@@ -4,7 +4,7 @@
 
 _Because your modern computer deserves to sound like it's from 1999_
 
-[![Download Now](https://img.shields.io/github/v/release/khawkins98/mac-disk-sounds?label=Download%20Now&style=for-the-badge)](https://github.com/khawkins98/mac-disk-sounds/releases)
+[![Download Now](https://img.shields.io/github/v/release/khawkins98/mac-disk-sounds?include_prereleases&label=Download%20Now&style=for-the-badge)](https://github.com/khawkins98/mac-disk-sounds/releases)
 
 ## What is this madness? 🤔
 
@@ -27,7 +27,7 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 
 ### macOS
 
-1. Download the latest `.dmg` from the releases page (or the `-mac.zip`, which holds the same app). There is one download for every Mac: it is a universal app that runs natively on both Apple silicon and Intel Macs.
+1. Download the latest `.dmg` from the releases page (or the `-mac.zip`, which holds the same app). There is one download for every Mac: it is a universal app that runs natively on both Apple silicon and Intel Macs (so the download is about twice the size of a single-architecture build).
 2. Drag the app to your Applications folder
 3. Open it and enjoy the sweet sounds of yesteryear!
 
@@ -43,7 +43,7 @@ Then open the app normally. You need to do this again after installing each new 
 
 #### Updates
 
-The app does not update itself. To see whether there is a newer version, choose **Check for Updates…** from its menu bar menu: it opens the [latest release](https://github.com/khawkins98/mac-disk-sounds/releases/latest) on GitHub, and the menu item above it shows the version you have. To update, quit the app, install the new version over the old one as above and run the `xattr` command again.
+The app does not update itself. To see whether there is a newer version, choose **Check for Updates…** from its menu bar menu: it opens the [releases page](https://github.com/khawkins98/mac-disk-sounds/releases) on GitHub (newest first, pre-releases included), and the menu item above it shows the version you have. To update, quit the app, install the new version over the old one as above and run the `xattr` command again.
 
 ### Windows
 

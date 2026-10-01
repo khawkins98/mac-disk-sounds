@@ -44,10 +44,6 @@ const pixelsMatch = (png, size) => {
   assert.ok(Buffer.from(image.rgba).equals(Buffer.from(renderIcon(size))), `${size} px image is out of date: run node scripts/make-app-icon.mjs`);
 };
 
-test('drawing is deterministic', () => {
-  assert.ok(Buffer.from(renderIcon(48)).equals(Buffer.from(renderIcon(48))));
-});
-
 test('build/icon.png is the 1024 px icon', () => {
   const image = decodePng(read('icon.png'));
   assert.equal(image.width, 1024);

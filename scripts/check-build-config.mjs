@@ -50,12 +50,16 @@ const ICON_CHECKS = {
     if (data.length < 8 || data.toString('latin1', 0, 4) !== 'icns') return 'is not an icns file';
     if (data.readUInt32BE(4) !== data.length) return 'has an icns length field that does not match the file size';
     const types = [];
-    for (let offset = 8; offset + 8 <= data.length;) {
+    let offset = 8;
+    while (offset + 8 <= data.length) {
       const length = data.readUInt32BE(offset + 4);
       if (length < 8 || offset + length > data.length) return 'has a malformed icns entry';
-      types.push(data.toString('latin1', offset, offset + 4));
+      const type = data.toString('latin1', offset, offset + 4);
+      if (!data.subarray(offset + 8, offset + 16).equals(PNG_SIGNATURE)) return `has a non-PNG ${type} entry`;
+      types.push(type);
       offset += length;
     }
+    if (offset !== data.length) return 'has trailing bytes after the last icns entry';
     if (!types.includes('ic10') && !types.includes('ic09')) return 'has no 512 or 1024 px image (ic09/ic10)';
     return null;
   },
