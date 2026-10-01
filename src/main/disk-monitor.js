@@ -8,13 +8,48 @@ import {
   diskstatsRate,
   splitLines,
   parseIostatLine,
-  parseTypeperfLine
+  parseTypeperfLine,
+  parseCimDiskLine,
+  cimDiskRate
 } from './disk-parsers.js';
 
+// typeperf takes counter paths by their display names, which Windows
+// translates: on a German install this is "\Physikalischer Datenträger...",
+// and the English names fail. So typeperf is only the fallback.
 const TYPEPERF_COUNTERS = [
   '\\PhysicalDisk(_Total)\\Disk Read Bytes/sec',
   '\\PhysicalDisk(_Total)\\Disk Write Bytes/sec'
 ];
+
+// The primary Windows backend: one long-lived PowerShell that reads the raw
+// disk counters through CIM once a second. WMI class and property names are
+// never translated, so this works whatever the display language. The raw
+// counters are cumulative byte counts plus the counter clock; the rates are
+// worked out here (parseCimDiskLine, cimDiskRate) rather than trusting the
+// "formatted" class, whose rates depend on when the WMI provider last
+// sampled. The line is written with the invariant culture and flushed
+// straight away, since PowerShell otherwise buffers output to a pipe.
+//
+// The script is one line with no double quotes or backslashes, so passing
+// it as one -Command argument needs no escaping on the Windows command line.
+const CIM_LOOP_BODY = [
+  "$d = Get-CimInstance -ClassName Win32_PerfRawData_PerfDisk_PhysicalDisk -Filter 'Name=''_Total''' | Select-Object -First 1",
+  "if ($d) { [Console]::Out.WriteLine([string]::Format($inv, 'MDS,{0},{1},{2},{3}', $d.Timestamp_PerfTime, $d.Frequency_PerfTime, $d.DiskReadBytesPersec, $d.DiskWriteBytesPersec)); [Console]::Out.Flush() }",
+  'Start-Sleep -Seconds 1'
+].join('; ');
+export const CIM_DISK_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  "$ProgressPreference = 'SilentlyContinue'",
+  '$inv = [Globalization.CultureInfo]::InvariantCulture',
+  `while ($true) { ${CIM_LOOP_BODY} }`
+].join('; ');
+
+export const POWERSHELL_ARGS = ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', CIM_DISK_SCRIPT];
+
+// If PowerShell/CIM has produced no sample this long after starting, use
+// typeperf instead. PowerShell itself can take several seconds to start on
+// a cold, busy machine, and the first sample needs two readings.
+const WINDOWS_FALLBACK_MS = 20000;
 
 // iostat -d shows only 4 disks unless told otherwise (sorted by name), which
 // can hide a busy external drive.
@@ -39,7 +74,12 @@ export function cleanRate(value) {
  * Backends:
  * - linux: reads /proc/diskstats on a timer (no child processes).
  * - darwin: one long-lived `iostat -d -n 64 -w 1 -K`.
- * - win32: one long-lived `typeperf ... -si 1`.
+ * - win32: one long-lived PowerShell reading the raw disk counters through
+ *   CIM (CIM_DISK_SCRIPT), which works on any display language. If it has
+ *   produced no sample after `windowsFallbackMs`, it is replaced for the
+ *   rest of the run by one long-lived `typeperf ... -si 1`, which needs
+ *   English counter names. `windowsBackend` ('cim' or 'typeperf') forces
+ *   one of them, with no fallback.
  * Long-lived processes are restarted with backoff if they exit unexpectedly
  * and killed on stop(). Other platforms emit nothing.
  */
@@ -50,6 +90,9 @@ export class DiskMonitor extends EventEmitter {
     readFile = nodeReadFile,
     spawn = nodeSpawn,
     logger = console,
+    windowsBackend = 'auto',
+    windowsFallbackMs = WINDOWS_FALLBACK_MS,
+    env = process.env,
     // The restart delay doubles from `initial` to `max`, and goes back to
     // `initial` only after a process has stayed up for `stableMs`.
     backoffMs = { initial: 1000, max: 60000, stableMs: 10000 },
@@ -61,6 +104,9 @@ export class DiskMonitor extends EventEmitter {
     this.readFile = readFile;
     this.spawn = spawn;
     this.logger = logger;
+    this.windowsBackend = windowsBackend;
+    this.windowsFallbackMs = windowsFallbackMs;
+    this.env = env;
     this.backoffMs = { initial: 1000, max: 60000, stableMs: 10000, ...backoffMs };
     this.now = now;
     this.running = false;
@@ -83,14 +129,7 @@ export class DiskMonitor extends EventEmitter {
         });
         break;
       case 'win32':
-        this.backend = this.#startProcess({
-          command: path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'typeperf.exe'),
-          args: [...TYPEPERF_COUNTERS, '-si', '1'],
-          makeLineHandler: (emit) => (line) => {
-            const parsed = parseTypeperfLine(line);
-            if (parsed.kind === 'data') emit(parsed.readBps, parsed.writeBps);
-          }
-        });
+        this.backend = this.#startWindows();
         break;
       default:
         this.#logOnce('unsupported', 'warn',
@@ -107,12 +146,14 @@ export class DiskMonitor extends EventEmitter {
   }
 
   // Samples from a backend that has been stopped or replaced are dropped.
+  // Returns whether the sample was emitted.
   #emitSample(backend, readBps, writeBps, totalBps) {
-    if (!this.running || backend !== this.backend) return;
+    if (!this.running || backend !== this.backend) return false;
     const read = cleanRate(readBps);
     const write = cleanRate(writeBps);
     const total = totalBps === undefined ? (read ?? 0) + (write ?? 0) : cleanRate(totalBps) ?? 0;
     this.emit('sample', { readBps: read, writeBps: write, totalBps: total, at: this.now() });
+    return true;
   }
 
   #logOnce(key, level, ...args) {
@@ -164,7 +205,61 @@ export class DiskMonitor extends EventEmitter {
     return backend;
   }
 
-  #startProcess({ command, args, makeLineHandler }) {
+  #windowsCommand(...parts) {
+    return path.win32.join(this.env.SystemRoot ?? 'C:\\Windows', 'System32', ...parts);
+  }
+
+  #startCim(owner, onSample) {
+    return this.#startProcess({
+      command: this.#windowsCommand('WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      args: POWERSHELL_ARGS,
+      makeLineHandler: (emit) => cimLineHandler(emit),
+      owner,
+      onSample
+    });
+  }
+
+  #startTypeperf(owner) {
+    return this.#startProcess({
+      command: this.#windowsCommand('typeperf.exe'),
+      args: [...TYPEPERF_COUNTERS, '-si', '1'],
+      makeLineHandler: (emit) => (line) => {
+        const parsed = parseTypeperfLine(line);
+        if (parsed.kind === 'data') emit(parsed.readBps, parsed.writeBps);
+      },
+      owner
+    });
+  }
+
+  // CIM first; typeperf if CIM has produced nothing in windowsFallbackMs.
+  #startWindows() {
+    if (this.windowsBackend === 'cim') return this.#startCim();
+    if (this.windowsBackend === 'typeperf') return this.#startTypeperf();
+    let inner = null;
+    let timer = null;
+    const backend = {
+      stop() {
+        clearTimeout(timer);
+        inner?.stop();
+      }
+    };
+    // Once CIM has delivered a sample it is known to work: no fallback.
+    inner = this.#startCim(backend, () => clearTimeout(timer));
+    timer = setTimeout(() => {
+      if (!this.running || this.backend !== backend) return;
+      inner.stop();
+      this.#logOnce('cim-fallback', 'warn',
+        `No disk samples from PowerShell/CIM after ${this.windowsFallbackMs / 1000} s; using typeperf instead ` +
+        '(it needs English performance counter names).');
+      inner = this.#startTypeperf(backend);
+    }, this.windowsFallbackMs);
+    return backend;
+  }
+
+  // `owner` is the backend object samples are checked against (this one,
+  // unless it is part of a composite backend); `onSample` is called after
+  // each sample it emits.
+  #startProcess({ command, args, makeLineHandler, owner = null, onSample = null }) {
     let child = null;
     let restartTimer = null;
     let delay = this.backoffMs.initial;
@@ -213,7 +308,7 @@ export class DiskMonitor extends EventEmitter {
       // Only the current child of a running backend may emit.
       const emit = (readBps, writeBps, totalBps) => {
         if (stopped || child !== current) return;
-        this.#emitSample(backend, readBps, writeBps, totalBps);
+        if (this.#emitSample(owner ?? backend, readBps, writeBps, totalBps)) onSample?.();
       };
       const onLine = makeLineHandler(emit);
 
@@ -283,6 +378,31 @@ export function iostatLineHandler(emit) {
           emit(null, null, parsed.totalBps);
         }
         break;
+    }
+  };
+}
+
+/**
+ * Line handler for one PowerShell/CIM process. Each line carries cumulative
+ * counters; the first is only a baseline, every later one emits the rates
+ * since the one before. A snapshot whose clock went backwards (a counter
+ * reset) becomes the new baseline; one that repeats the last is ignored.
+ */
+export function cimLineHandler(emit) {
+  let previous = null;
+  return (line) => {
+    const parsed = parseCimDiskLine(line);
+    if (parsed.kind !== 'data') return;
+    if (previous === null) {
+      previous = parsed;
+      return;
+    }
+    const rate = cimDiskRate(previous, parsed);
+    if (rate) {
+      emit(rate.readBps, rate.writeBps);
+      previous = parsed;
+    } else if (parsed.timestamp !== previous.timestamp) {
+      previous = parsed;
     }
   };
 }

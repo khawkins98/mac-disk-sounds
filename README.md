@@ -20,7 +20,7 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 - 💾 Remembers your settings, and can start at login
 - 🤓 Perfect for confusing your coworkers
 - 🎮 Hidden surprises for the curious (hint: some dots like to be clicked...)
-- 🪟 Cross-platform: Linux is tested; disk activity detection on macOS and Windows is new and not yet tested on real machines, and on Windows it currently needs English performance counter names (an English-language Windows install)
+- 🪟 Cross-platform: Linux is tested; disk activity detection on macOS and Windows is new and not yet tested on real machines. On Windows it reads the disk counters through PowerShell and CIM, which works in any display language; if that fails it falls back to `typeperf`, which needs English counter names
 - 🏋️ Dozens or hundreds of MBs to download and make your SSD workout! Thanks Electron!
 
 ## Installation 🚀

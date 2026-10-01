@@ -4,7 +4,9 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
-import { DiskMonitor, cleanRate } from '../src/main/disk-monitor.js';
+import { DiskMonitor, cleanRate, CIM_DISK_SCRIPT, POWERSHELL_ARGS } from '../src/main/disk-monitor.js';
+
+const MIB = 1024 * 1024;
 
 const quietLogger = () => {
   const calls = [];
@@ -114,9 +116,9 @@ test('darwin: one iostat process, skips the since-boot line, sums MB/s', async (
   assert.equal(children.length, 1, 'no restart after stop()');
 });
 
-test('win32: one typeperf process with both counters', async () => {
+test('win32 (typeperf forced): one typeperf process with both counters', async () => {
   const { spawn, children } = fakeSpawn();
-  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger() });
+  const monitor = new DiskMonitor({ platform: 'win32', windowsBackend: 'typeperf', spawn, logger: quietLogger() });
   const samples = [];
   monitor.on('sample', (s) => samples.push(s));
   monitor.start();
@@ -137,10 +139,89 @@ test('win32: one typeperf process with both counters', async () => {
   assert.equal(children[0].killed, true);
 });
 
+test('win32: one long-lived PowerShell reading raw CIM counters, rates from the counter clock', async () => {
+  const { spawn, children } = fakeSpawn();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger(), env: { SystemRoot: 'D:\\Win' } });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s));
+  monitor.start();
+
+  assert.equal(children.length, 1);
+  assert.equal(children[0].command, 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  assert.deepEqual(children[0].args, POWERSHELL_ARGS);
+  assert.deepEqual(POWERSHELL_ARGS.slice(0, -1), ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command']);
+  // Only untranslated WMI names, and nothing the Windows command line would
+  // need to escape.
+  assert.match(CIM_DISK_SCRIPT, /Win32_PerfRawData_PerfDisk_PhysicalDisk/);
+  assert.match(CIM_DISK_SCRIPT, /\[Console\]::Out\.Flush\(\)/);
+  assert.match(CIM_DISK_SCRIPT, /InvariantCulture/);
+  assert.doesNotMatch(CIM_DISK_SCRIPT, /["\\\n]/);
+
+  const out = children[0].stdout;
+  out.write('MDS,1000000000,10000000,5000,7000\r\n'); // baseline only
+  out.write('MDS,1010000000,10000000,1053576,7000\r\nMDS,1015000000,10000');
+  out.write('000,1053576,531288\r\n');
+  out.write('MDS,1015000000,10000000,1053576,531288\r\n'); // same snapshot: ignored
+  await delay(5);
+  assert.deepEqual(samples.map((s) => [s.readBps, s.writeBps]), [[MIB, 0], [0, MIB]]);
+  monitor.stop();
+  assert.equal(children[0].killed, true);
+});
+
+test('win32: falls back to typeperf if PowerShell/CIM gives no sample in time', async () => {
+  const { spawn, children } = fakeSpawn();
+  const logger = quietLogger();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger, windowsFallbackMs: 30, backoffMs: { initial: 5 } });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s.readBps));
+  monitor.start();
+  // PowerShell prints only a baseline (or nothing, or keeps failing).
+  children[0].stdout.write('MDS,1000000000,10000000,5000,7000\r\n');
+  await delay(60);
+
+  assert.equal(children[0].killed, true);
+  const typeperf = children.at(-1);
+  assert.match(typeperf.command, /typeperf\.exe$/);
+  assert.equal(children.filter((c) => /powershell/.test(c.command) && !c.killed).length, 0, 'no PowerShell left running');
+  // A late line from the killed PowerShell does not count.
+  children[0].stdout.write('MDS,1010000000,10000000,999999,7000\r\n');
+  typeperf.stdout.write('"10/01/2026 09:15:02.125","2048.0","1024.0"\r\n');
+  await delay(5);
+  assert.deepEqual(samples, [2048]);
+  assert.equal(logger.calls.filter(([level, text]) => level === 'warn' && /using typeperf instead/.test(text)).length, 1);
+  monitor.stop();
+  assert.equal(typeperf.killed, true);
+});
+
+test('win32: no fallback once PowerShell/CIM has delivered a sample', async () => {
+  const { spawn, children } = fakeSpawn();
+  const logger = quietLogger();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger, windowsFallbackMs: 30 });
+  let samples = 0;
+  monitor.on('sample', () => samples++);
+  monitor.start();
+  children[0].stdout.write('MDS,1000000000,10000000,5000,7000\r\nMDS,1010000000,10000000,6000,7000\r\n');
+  await delay(60);
+  assert.equal(samples, 1);
+  assert.equal(children.length, 1);
+  assert.equal(children[0].killed, false);
+  assert.deepEqual(logger.calls, []);
+  monitor.stop();
+});
+
+test('win32: stopping before the fallback time cancels the fallback', async () => {
+  const { spawn, children } = fakeSpawn();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger(), windowsFallbackMs: 20 });
+  monitor.start();
+  monitor.stop();
+  await delay(50);
+  assert.equal(children.length, 1);
+});
+
 test('restarts a process that exits unexpectedly, with backoff', async () => {
   const { spawn, children } = fakeSpawn();
   const logger = quietLogger();
-  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger, backoffMs: { initial: 40, max: 160 } });
+  const monitor = new DiskMonitor({ platform: 'win32', windowsBackend: 'typeperf', spawn, logger, backoffMs: { initial: 40, max: 160 } });
   monitor.start();
 
   children[0].emit('exit', 1, null);
@@ -169,6 +250,7 @@ test('a crash loop keeps backing off even if it emits samples, and logs once', a
   let clock = 0;
   const monitor = new DiskMonitor({
     platform: 'win32',
+    windowsBackend: 'typeperf',
     spawn,
     logger,
     now: () => clock,
@@ -210,7 +292,7 @@ test('a crash loop keeps backing off even if it emits samples, and logs once', a
 
 test('samples from a replaced child or a stopped monitor are dropped', async () => {
   const { spawn, children } = fakeSpawn();
-  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger(), backoffMs: { initial: 5 } });
+  const monitor = new DiskMonitor({ platform: 'win32', windowsBackend: 'typeperf', spawn, logger: quietLogger(), backoffMs: { initial: 5 } });
   const samples = [];
   monitor.on('sample', (s) => samples.push(s.readBps));
   monitor.start();

@@ -1,9 +1,16 @@
 // Smoke test for the real disk monitor backend on this machine: Linux
-// /proc/diskstats, macOS iostat, Windows typeperf. Runs the DiskMonitor for
-// a few seconds while writing (and fsyncing) a temporary file, then checks
-// that the backend produced parsed samples with sane numbers.
+// /proc/diskstats, macOS iostat, Windows PowerShell/CIM (or typeperf). Runs
+// the DiskMonitor for a few seconds while writing (and fsyncing) a temporary
+// file, then checks that the backend produced parsed samples with sane
+// numbers.
 //
 //   node scripts/smoke-monitor.mjs
+//   node scripts/smoke-monitor.mjs --windows-backend=typeperf
+//
+// On Windows the default is what the app does: PowerShell/CIM, falling back
+// to typeperf. The fallback logs a warning, which fails this test, so CI
+// notices if CIM stops working. --windows-backend=cim or =typeperf forces
+// one backend.
 //
 // Exits non-zero on failure. Used by CI on each platform.
 
@@ -33,9 +40,17 @@ const logger = {
   }
 };
 
-// Echo the first raw lines the backend reads (iostat or typeperf output,
-// or /proc/diskstats), so a CI failure shows what the parser was given.
-const RAW_LINES = 10;
+const backendArg = process.argv.find((arg) => arg.startsWith('--windows-backend='));
+const windowsBackend = backendArg ? backendArg.split('=')[1] : 'auto';
+if (!['auto', 'cim', 'typeperf'].includes(windowsBackend)) {
+  console.error(`Unknown --windows-backend: ${windowsBackend}`);
+  process.exit(2);
+}
+
+// Echo the first raw lines the backend reads (iostat, PowerShell or
+// typeperf output, or /proc/diskstats), so a CI failure shows what the
+// parser was given.
+const RAW_LINES = 12;
 let rawShown = 0;
 function showRaw(text) {
   for (const line of String(text).split(/\r?\n/)) {
@@ -45,7 +60,7 @@ function showRaw(text) {
   }
 }
 const spawn = (command, args, options) => {
-  console.log(`[spawn] ${command} ${args.join(' ')}`);
+  console.log(`[spawn] ${command} ${args.map((arg) => (/\s/.test(arg) ? `"${arg}"` : arg)).join(' ')}`);
   const child = nodeSpawn(command, args, options);
   child.stdout?.on('data', showRaw);
   child.stderr?.on('data', (chunk) => console.log(`[stderr] ${String(chunk).trimEnd()}`));
@@ -64,7 +79,7 @@ const readFile = async (...args) => {
 
 const isRate = (value) => value === null || (Number.isFinite(value) && value >= 0);
 
-const monitor = new DiskMonitor({ logger, spawn, readFile });
+const monitor = new DiskMonitor({ logger, spawn, readFile, windowsBackend });
 monitor.on('sample', (sample) => {
   samples.push(sample);
   const mb = (value) => (value === null ? 'n/a' : (value / 1024 / 1024).toFixed(2));
@@ -89,7 +104,7 @@ async function generateIo() {
   }
 }
 
-console.log(`Platform ${process.platform}: starting the disk monitor.`);
+console.log(`Platform ${process.platform}: starting the disk monitor${process.platform === 'win32' ? ` (Windows backend: ${windowsBackend})` : ''}.`);
 const started = Date.now();
 monitor.start();
 const io = generateIo();

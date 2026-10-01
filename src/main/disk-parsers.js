@@ -163,3 +163,45 @@ export function parseTypeperfLine(line) {
   if (readBps === null || writeBps === null) return { kind: 'other' };
   return { kind: 'data', readBps: Math.max(0, readBps), writeBps: Math.max(0, writeBps) };
 }
+
+/**
+ * Parse one line printed by the PowerShell loop in disk-monitor.js
+ * (CIM_DISK_SCRIPT):
+ *
+ *   MDS,<Timestamp_PerfTime>,<Frequency_PerfTime>,<DiskReadBytesPersec>,<DiskWriteBytesPersec>
+ *
+ * The values are the raw (cumulative) counters of the `_Total` instance of
+ * Win32_PerfRawData_PerfDisk_PhysicalDisk, printed with the invariant
+ * culture, so they are plain unsigned integers on every Windows language.
+ * Anything else (PowerShell noise, a partial line) is 'other'.
+ *
+ * @param {string} line
+ * @returns {{kind: 'data', timestamp: number, frequency: number, readBytes: number, writeBytes: number} | {kind: 'other'}}
+ */
+export function parseCimDiskLine(line) {
+  const fields = line.trim().split(',');
+  if (fields.length !== 5 || fields[0] !== 'MDS') return { kind: 'other' };
+  const numbers = fields.slice(1).map((field) => (/^\d+$/.test(field) ? Number(field) : NaN));
+  if (!numbers.every(Number.isFinite)) return { kind: 'other' };
+  const [timestamp, frequency, readBytes, writeBytes] = numbers;
+  if (!(frequency > 0)) return { kind: 'other' };
+  return { kind: 'data', timestamp, frequency, readBytes, writeBytes };
+}
+
+/**
+ * Rates between two parsed CIM lines. The byte counters are
+ * PERF_COUNTER_BULK_COUNT, timed by the performance counter clock
+ * (Timestamp_PerfTime ticks at Frequency_PerfTime per second). Returns null
+ * when the clock did not move forward (a repeated or reset snapshot); a
+ * counter that went backwards contributes 0.
+ * @returns {{readBps: number, writeBps: number} | null}
+ */
+export function cimDiskRate(prev, curr) {
+  const ticks = curr.timestamp - prev.timestamp;
+  if (!(ticks > 0) || curr.frequency !== prev.frequency) return null;
+  const seconds = ticks / curr.frequency;
+  return {
+    readBps: Math.max(0, curr.readBytes - prev.readBytes) / seconds,
+    writeBps: Math.max(0, curr.writeBytes - prev.writeBytes) / seconds
+  };
+}

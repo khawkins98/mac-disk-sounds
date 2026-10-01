@@ -6,7 +6,9 @@ import {
   diskstatsRate,
   splitLines,
   parseIostatLine,
-  parseTypeperfLine
+  parseTypeperfLine,
+  parseCimDiskLine,
+  cimDiskRate
 } from '../src/main/disk-parsers.js';
 
 const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
@@ -129,4 +131,59 @@ test('parseTypeperfLine rejects headings, blanks and garbage', () => {
   assert.deepEqual(parseTypeperfLine('"10/01/2026 09:15:01.123","-1"'), { kind: 'other' });
   assert.deepEqual(parseTypeperfLine('Exiting, please wait...'), { kind: 'other' });
   assert.deepEqual(parseTypeperfLine(''), { kind: 'other' });
+});
+
+test('parseCimDiskLine reads the raw counters printed by the PowerShell loop', () => {
+  const results = fixture('cim-disk.txt').split(/\r?\n/).map(parseCimDiskLine);
+  const data = results.filter((r) => r.kind === 'data');
+  assert.equal(data.length, 4);
+  assert.deepEqual(data[0], {
+    kind: 'data',
+    timestamp: 2617463825123,
+    frequency: 10000000,
+    readBytes: 48318382080,
+    writeBytes: 96636764160
+  });
+  // The blank line, the warning, the line with a missing field and the
+  // empty last line are not data.
+  assert.equal(results.length - data.length, 4);
+});
+
+test('parseCimDiskLine rejects anything but MDS lines of unsigned integers', () => {
+  for (const line of [
+    '',
+    'MDS',
+    'MDS,1,2,3',
+    'MDS,1,2,3,4,5',
+    'XYZ,1,10000000,3,4',
+    'MDS,1,10000000,-3,4',
+    'MDS,1,10000000,3.5,4',
+    'MDS,1,10000000,3 456,4',
+    'MDS,1,0,3,4',
+    'MDS,1,10000000,1.234.567,4'
+  ]) {
+    assert.deepEqual(parseCimDiskLine(line), { kind: 'other' }, line);
+  }
+  // CRLF line endings and stray spaces are fine.
+  assert.equal(parseCimDiskLine('  MDS,1,10000000,3,4\r').kind, 'data');
+});
+
+test('cimDiskRate turns two raw snapshots into bytes per second on the counter clock', () => {
+  const [a, b, c, d] = fixture('cim-disk.txt').split(/\r?\n/).map(parseCimDiskLine).filter((r) => r.kind === 'data');
+  const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-6, `${actual} != ${expected}`);
+  const ab = cimDiskRate(a, b);
+  close(ab.readBps, 0);
+  close(ab.writeBps, 80896 / (10016748 / 1e7));
+  const bc = cimDiskRate(b, c);
+  close(bc.readBps, MIB / (10016626 / 1e7));
+  close(bc.writeBps, (MIB / 2) / (10016626 / 1e7));
+  assert.deepEqual(cimDiskRate(c, d), { readBps: 0, writeBps: 0 });
+});
+
+test('cimDiskRate: a clock that did not move forward gives null; counters going back give 0', () => {
+  const snap = (timestamp, readBytes, writeBytes, frequency = 10000000) => ({ timestamp, frequency, readBytes, writeBytes });
+  assert.equal(cimDiskRate(snap(100, 0, 0), snap(100, 10, 10)), null);
+  assert.equal(cimDiskRate(snap(100, 0, 0), snap(50, 10, 10)), null);
+  assert.equal(cimDiskRate(snap(100, 0, 0), snap(200, 10, 10, 3000000)), null, 'clock frequency changed');
+  assert.deepEqual(cimDiskRate(snap(0, 500, 500), snap(10000000, 100, 600)), { readBps: 0, writeBps: 100 });
 });
