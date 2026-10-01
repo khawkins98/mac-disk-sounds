@@ -7,7 +7,7 @@ import {
   splitLines,
   parseIostatLine,
   parseTypeperfLine
-} from '../disk-parsers.js';
+} from '../src/main/disk-parsers.js';
 
 const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
 const MIB = 1024 * 1024;

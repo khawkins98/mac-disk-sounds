@@ -4,9 +4,9 @@
 const CLICK_SECONDS = 0.3;
 const RAMP_SECONDS = 0.01;
 
-const IBM_FILE = 'sounds/hard-disk-drive-ibm-1999-48823.mp3';
-const GENERIC_FILE = 'sounds/computer-hard-drive-access-fan-click-62422.mp3';
-const MODEM_FILE = 'sounds/the-sound-of-dial-up-internet-6240.mp3';
+const IBM_FILE = '../../assets/sounds/hard-disk-drive-ibm-1999-48823.mp3';
+const GENERIC_FILE = '../../assets/sounds/computer-hard-drive-access-fan-click-62422.mp3';
+const MODEM_FILE = '../../assets/sounds/the-sound-of-dial-up-internet-6240.mp3';
 
 // Click sets: random 300 ms slices taken from [from, to) seconds of a file.
 export const CLICK_SETS = Object.freeze({
@@ -43,7 +43,7 @@ export class AudioEngine {
 
   /**
    * Chromium can start an AudioContext suspended until a user gesture.
-   * Electron normally allows autoplay (see autoplayPolicy in main.js), but
+   * Electron normally allows autoplay (see autoplayPolicy in src/main/index.js), but
    * if it does not, resume on the first click or key press.
    */
   resumeWhenAllowed() {

@@ -8,6 +8,9 @@ import { ActivityModel } from './activity.js';
 // ES Module path resolution
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const SRC_DIR = path.join(__dirname, '..');
+const APP_ROOT = path.join(SRC_DIR, '..');
+const INDEX_FILE = path.join(SRC_DIR, 'renderer', 'index.html');
 
 // Compare file URL paths decoded, and case-insensitively where the file
 // system usually is, so encoding differences between Node and Chromium
@@ -17,7 +20,7 @@ function normaliseFilePath(url) {
   const decoded = decodeURIComponent(url.pathname);
   return CASE_INSENSITIVE_FS ? decoded.toLowerCase() : decoded;
 }
-const INDEX_PATH = normaliseFilePath(pathToFileURL(path.join(__dirname, 'index.html')));
+const INDEX_PATH = normaliseFilePath(pathToFileURL(INDEX_FILE));
 
 // Hosts the page links to (index.html). Anything else is refused.
 const EXTERNAL_HOSTS = new Set(['github.com', 'pixabay.com']);
@@ -86,7 +89,7 @@ async function createWindow() {
     transparent: true,
     backgroundColor: '#ffffff',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
+      preload: path.join(SRC_DIR, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -96,7 +99,7 @@ async function createWindow() {
       backgroundThrottling: false,
       autoplayPolicy: 'no-user-gesture-required'
     },
-    icon: path.join(__dirname, 'icon.iconset', 'icon_256x256.png')
+    icon: path.join(APP_ROOT, 'build', 'icon.png')
   });
 
   const { webContents } = mainWindow;
@@ -116,7 +119,7 @@ async function createWindow() {
     mainWindow = null;
   });
 
-  await mainWindow.loadFile('index.html');
+  await mainWindow.loadFile(INDEX_FILE);
 
   // The window may have been closed while it was loading.
   if (mainWindow) startMonitor();

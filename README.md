@@ -120,7 +120,7 @@ This project started as an experiment in two ways:
 - IBM hard drive sounds from viertelnachvier on Pixabay
 - Additional HDD sounds from martian on Pixabay
 - [Dialup sound from wtermini on Pixabay](https://pixabay.com/sound-effects/the-sound-of-dial-up-internet-6240/)
-- System 7 interface toolkit from [sakun/system.css](https://github.com/sakofchit/system.css) (MIT; v0.1.11 is bundled in `vendor/system.css/`)
+- System 7 interface toolkit from [sakun/system.css](https://github.com/sakofchit/system.css) (MIT; v0.1.11 is bundled in `src/renderer/vendor/system.css/`)
 - Built with Electron and too much free time
 - Inspired by the golden age of spinning rust
 
@@ -128,7 +128,7 @@ This project started as an experiment in two ways:
 
 MIT License - Feel free to make your computer sound as vintage as you want!
 
-The sound files in `sounds/` are **not** covered by the MIT licence. They are from Pixabay and used under the Pixabay Content License; see [sounds/CREDITS.md](sounds/CREDITS.md) for authors, sources and the ranges the app uses.
+The sound files in `assets/sounds/` are **not** covered by the MIT licence. They are from Pixabay and used under the Pixabay Content License; see [assets/sounds/CREDITS.md](assets/sounds/CREDITS.md) for authors, sources and the ranges the app uses.
 
 ---
 

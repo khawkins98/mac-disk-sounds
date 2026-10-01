@@ -29,13 +29,9 @@ jobs:
 
       - name: Check JavaScript syntax
         run: |
-          node --check main.js
-          node --check activity.js
-          node --check disk-monitor.js
-          node --check disk-parsers.js
-          node --check preload.cjs
-          node --check renderer.js
-          node --check audio.js
+          for file in src/main/*.js src/preload.cjs src/renderer/*.js; do
+            node --check "$file"
+          done
 
       - name: Lint
         run: npm run lint

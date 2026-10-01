@@ -8,7 +8,7 @@ In short, that licence allows using them as part of this app, but not
 redistributing them on their own as standalone audio files; see the
 licence for the full terms.
 
-The ranges below are what `audio.js` plays, in seconds into each file.
+The ranges below are what `src/renderer/audio.js` plays, in seconds into each file.
 Lengths were measured from the files; the original download dates were
 not recorded.
 

@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
-import { DiskMonitor, cleanRate } from '../disk-monitor.js';
+import { DiskMonitor, cleanRate } from '../src/main/disk-monitor.js';
 
 const quietLogger = () => {
   const calls = [];
