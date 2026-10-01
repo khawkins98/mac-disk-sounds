@@ -6,7 +6,7 @@
 // - the System 7 settings window (src/renderer/index.html) is created on
 //   demand and destroyed when closed;
 // - the app quits only from the tray menu (or when the OS asks it to).
-import { app, BrowserWindow, ipcMain, powerSaveBlocker, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, powerSaveBlocker, session, shell } from 'electron';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -230,6 +230,15 @@ function createAudioWindow() {
     console.error('Audio window renderer gone:', details.reason);
     if (!win.isDestroyed()) win.destroy();
   });
+  // Same for a page that failed to load (-3 is an aborted load, e.g. one
+  // replaced by a reload, which is not a failure).
+  win.webContents.on('did-fail-load', (_event, errorCode, description, _url, isMainFrame) => {
+    if (!isMainFrame || errorCode === -3) return;
+    console.error('Audio window failed to load:', errorCode, description);
+    if (!win.isDestroyed()) win.destroy();
+  });
+  // Windows shutdown or logoff does not emit before-quit; save settings now.
+  win.on('session-end', () => store?.flush());
   win.on('closed', () => {
     if (audioWindow === win) audioWindow = null;
     if (quitting) return;
@@ -273,7 +282,21 @@ function createSettingsWindow() {
   win.on('show', catchUp);
   win.on('restore', catchUp);
   win.webContents.on('did-finish-load', catchUp);
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => {
+    win.show();
+    // With no Dock icon, macOS does not bring a new window forward on its own.
+    if (IS_MAC) {
+      app.focus({ steal: true });
+      win.focus();
+    }
+  });
+
+  // A crashed settings page is useless; drop the window so the next show
+  // creates a fresh one.
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error('Settings window renderer gone:', details.reason);
+    if (!win.isDestroyed()) win.destroy();
+  });
 
   win.on('closed', () => {
     if (settingsWindow === win) settingsWindow = null;
@@ -351,7 +374,8 @@ function allowedExternalUrl(value) {
 
 function registerIpc() {
   onInvoke('settings:get', ['settings', 'audio'], () => store.get());
-  onInvoke('settings:set', ['settings'], (patch) => setSettings(patch));
+  // Once quitting has begun, changes would not be saved reliably; ignore them.
+  onInvoke('settings:set', ['settings'], (patch) => (quitting ? store.get() : setSettings(patch)));
 
   onMessage('window-control', ['settings'], (command) => {
     if (!WINDOW_COMMANDS.has(command)) return;
@@ -429,6 +453,8 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
     store.on('change', onSettingsChanged);
+    // macOS and Linux shutdown or logoff; may come without before-quit.
+    powerMonitor.on('shutdown', () => store.flush());
     registerIpc();
 
     createAudioWindow();
