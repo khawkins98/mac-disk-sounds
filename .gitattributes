@@ -1,5 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
-# Keep the Windows line endings in this fixture; the parser must handle them.
+# Keep the Windows line endings in these fixtures; the parsers must handle them.
 test/fixtures/typeperf.txt -text
+test/fixtures/cim-disk.txt -text

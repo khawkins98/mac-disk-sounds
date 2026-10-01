@@ -296,3 +296,24 @@ label {
 .window.disabled .speed-indicator {
   opacity: 0.4;
 }
+
+/* Shown only when no tray icon can be seen (Linux without a tray host). */
+.no-tray {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  margin: 0 0 4px;
+  padding: 0 0 6px;
+  border-bottom: 1px solid black;
+}
+
+.no-tray[hidden] {
+  display: none;
+}
+
+.no-tray .btn {
+  font-size: 12px;
+  min-width: 0;
+  padding: 0 8px;
+}

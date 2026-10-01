@@ -23,7 +23,8 @@ not recorded.
   - Startup sound: 0:03 to 0:12 (9 s), faded in and out.
   - Background loop: loops 1:50 to 2:10, faded in.
   - "IBM Hard Drive (1999)" click set: random 300 ms slices from
-    0:02 to 1:40, a new offset for every click.
+    0:02 to 1:40 (64 picked at random each time the sounds are loaded;
+    each click plays one of them).
 
 ## computer-hard-drive-access-fan-click-62422.mp3
 
@@ -33,7 +34,8 @@ not recorded.
 - Licence: Pixabay Content License
 - Length: about 0:42
 - Used for: the default "Computer Hard Drive Access" click set: random
-  300 ms slices from 0:01 to 0:40, a new offset for every click.
+  300 ms slices from 0:01 to 0:40 (64 picked at random each time the
+  sounds are loaded; each click plays one of them).
 
 ## the-sound-of-dial-up-internet-6240.mp3
 

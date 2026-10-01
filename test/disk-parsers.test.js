@@ -6,7 +6,11 @@ import {
   diskstatsRate,
   splitLines,
   parseIostatLine,
-  parseTypeperfLine
+  parseTypeperfLine,
+  parseCimDiskLine,
+  parsePlistValues,
+  isDiskImageInfo,
+  cimDiskRate
 } from '../src/main/disk-parsers.js';
 
 const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
@@ -26,6 +30,22 @@ test('parseDiskstats ignores partitions, loop, ram, dm, zram and optical drives'
     .filter((line) => /\b(sda1|nvme0n1p\d|mmcblk0p1|xvda1|loop\d|ram0|dm-0|zram0|sr0)\b/.test(line))
     .join('\n');
   assert.deepEqual(parseDiskstats(text), { readBytes: 0, writeBytes: 0, devices: [] });
+});
+
+test('parseDiskstats counts legacy IDE (hd*) and User-mode Linux (ubd*) disks, not their partitions', () => {
+  const text = [
+    '   3       0 hda 5000 0 80000 900 200 0 1600 40 0 600 940 0 0 0 0 0 0',
+    '   3       1 hda1 4990 0 79900 899 200 0 1600 40 0 600 939 0 0 0 0 0 0',
+    '   3      64 hdb 10 0 160 2 0 0 0 0 0 2 2 0 0 0 0 0 0',
+    '  98       0 ubda 700 0 11200 50 30 0 240 3 0 40 53 0 0 0 0 0 0',
+    '  98       1 ubda1 690 0 11000 49 30 0 240 3 0 40 52 0 0 0 0 0 0',
+    '  98      16 ubdb 1 0 8 0 1 0 8 0 0 0 0 0 0 0 0 0 0',
+    '  98      17 ubdb2 1 0 8 0 1 0 8 0 0 0 0 0 0 0 0 0 0'
+  ].join('\n');
+  const { devices, readBytes, writeBytes } = parseDiskstats(text);
+  assert.deepEqual(devices, ['hda', 'hdb', 'ubda', 'ubdb']);
+  assert.equal(readBytes, (80000 + 160 + 11200 + 8) * 512);
+  assert.equal(writeBytes, (1600 + 0 + 240 + 8) * 512);
 });
 
 test('parseDiskstats tolerates empty and malformed input', () => {
@@ -83,6 +103,39 @@ test('parseIostatLine follows a changed heading when a disk appears', () => {
   assert.equal(result.totalBps, 6 * MIB);
 });
 
+test('parseIostatLine also gives the rate of each disk, in device-line order', () => {
+  const header = parseIostatLine('    KB/t  tps  MB/s     KB/t  tps  MB/s ', null);
+  const result = parseIostatLine('   64.00  120  7.50   512.00  80 40.00 ', header.mbColumns);
+  assert.deepEqual(result.deviceBps, [7.5 * MIB, 40 * MIB]);
+  assert.equal(result.totalBps, 47.5 * MIB);
+});
+
+test('parsePlistValues reads the simple values of diskutil info -plist', () => {
+  const disk0 = parsePlistValues(fixture('diskutil-info-disk0.plist'));
+  assert.equal(disk0.DeviceIdentifier, 'disk0');
+  assert.equal(disk0.BusProtocol, 'Apple Fabric');
+  assert.equal(disk0.VirtualOrPhysical, 'Physical');
+  assert.equal(disk0.Internal, true);
+  assert.equal(disk0.Removable, false);
+  assert.equal(disk0.Size, 500277792768);
+  assert.equal(disk0.BooterDeviceIdentifier, '');
+  assert.deepEqual(parsePlistValues('<key>A &amp; B</key><string>x &lt;y&gt;</string><key>E</key><string/>'), { 'A & B': 'x <y>', E: '' });
+  assert.deepEqual(parsePlistValues('not a plist'), {});
+  assert.deepEqual(parsePlistValues(''), {});
+});
+
+test('isDiskImageInfo: a mounted .dmg is a disk image, an internal SSD is not', () => {
+  assert.equal(isDiskImageInfo(parsePlistValues(fixture('diskutil-info-dmg.plist'))), true);
+  assert.equal(isDiskImageInfo(parsePlistValues(fixture('diskutil-info-disk0.plist'))), false);
+  // Without the protocol, a virtual disk with disk image media still is.
+  assert.equal(isDiskImageInfo({ VirtualOrPhysical: 'Virtual', MediaName: 'Apple UDIF read-write Media' }), true);
+  assert.equal(isDiskImageInfo({ VirtualOrPhysical: 'Virtual', MediaName: 'Disk Image' }), true);
+  // Other virtual disks (an APFS container, a RAID set) are not.
+  assert.equal(isDiskImageInfo({ VirtualOrPhysical: 'Virtual', BusProtocol: 'Apple Fabric', MediaName: 'AppleAPFSMedia' }), false);
+  assert.equal(isDiskImageInfo({ BusProtocol: 'USB', MediaName: 'Samsung T7' }), false);
+  assert.equal(isDiskImageInfo({}), false);
+});
+
 test('parseIostatLine ignores blank lines and error text', () => {
   assert.deepEqual(parseIostatLine('', null), { kind: 'other' });
   assert.deepEqual(parseIostatLine('iostat: some error', null), { kind: 'other' });
@@ -113,4 +166,59 @@ test('parseTypeperfLine rejects headings, blanks and garbage', () => {
   assert.deepEqual(parseTypeperfLine('"10/01/2026 09:15:01.123","-1"'), { kind: 'other' });
   assert.deepEqual(parseTypeperfLine('Exiting, please wait...'), { kind: 'other' });
   assert.deepEqual(parseTypeperfLine(''), { kind: 'other' });
+});
+
+test('parseCimDiskLine reads the raw counters printed by the PowerShell loop', () => {
+  const results = fixture('cim-disk.txt').split(/\r?\n/).map(parseCimDiskLine);
+  const data = results.filter((r) => r.kind === 'data');
+  assert.equal(data.length, 4);
+  assert.deepEqual(data[0], {
+    kind: 'data',
+    timestamp: 2617463825123,
+    frequency: 10000000,
+    readBytes: 48318382080,
+    writeBytes: 96636764160
+  });
+  // The blank line, the warning, the line with a missing field and the
+  // empty last line are not data.
+  assert.equal(results.length - data.length, 4);
+});
+
+test('parseCimDiskLine rejects anything but MDS lines of unsigned integers', () => {
+  for (const line of [
+    '',
+    'MDS',
+    'MDS,1,2,3',
+    'MDS,1,2,3,4,5',
+    'XYZ,1,10000000,3,4',
+    'MDS,1,10000000,-3,4',
+    'MDS,1,10000000,3.5,4',
+    'MDS,1,10000000,3 456,4',
+    'MDS,1,0,3,4',
+    'MDS,1,10000000,1.234.567,4'
+  ]) {
+    assert.deepEqual(parseCimDiskLine(line), { kind: 'other' }, line);
+  }
+  // CRLF line endings and stray spaces are fine.
+  assert.equal(parseCimDiskLine('  MDS,1,10000000,3,4\r').kind, 'data');
+});
+
+test('cimDiskRate turns two raw snapshots into bytes per second on the counter clock', () => {
+  const [a, b, c, d] = fixture('cim-disk.txt').split(/\r?\n/).map(parseCimDiskLine).filter((r) => r.kind === 'data');
+  const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-6, `${actual} != ${expected}`);
+  const ab = cimDiskRate(a, b);
+  close(ab.readBps, 0);
+  close(ab.writeBps, 80896 / (10016748 / 1e7));
+  const bc = cimDiskRate(b, c);
+  close(bc.readBps, MIB / (10016626 / 1e7));
+  close(bc.writeBps, (MIB / 2) / (10016626 / 1e7));
+  assert.deepEqual(cimDiskRate(c, d), { readBps: 0, writeBps: 0 });
+});
+
+test('cimDiskRate: a clock that did not move forward gives null; counters going back give 0', () => {
+  const snap = (timestamp, readBytes, writeBytes, frequency = 10000000) => ({ timestamp, frequency, readBytes, writeBytes });
+  assert.equal(cimDiskRate(snap(100, 0, 0), snap(100, 10, 10)), null);
+  assert.equal(cimDiskRate(snap(100, 0, 0), snap(50, 10, 10)), null);
+  assert.equal(cimDiskRate(snap(100, 0, 0), snap(200, 10, 10, 3000000)), null, 'clock frequency changed');
+  assert.deepEqual(cimDiskRate(snap(0, 500, 500), snap(10000000, 100, 600)), { readBps: 0, writeBps: 100 });
 });

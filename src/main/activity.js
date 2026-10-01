@@ -12,6 +12,25 @@ export const DEFAULTS = Object.freeze({
   samplesToActivate: 2,
   // Consecutive samples below the threshold needed to go idle.
   samplesToIdle: 3,
+  // Periodic writers. A background job that writes a burst every few
+  // seconds would otherwise click (and, on macOS, hold the power assertion)
+  // forever: a short gap never leaves `samplesToIdle` quiet samples, and a
+  // long gap ends each spell only for the next burst to start another.
+  // The last `dutyWindow` samples are kept across active and idle spells.
+  // The pattern counts as periodic when that window holds at least
+  // `periodicRuns` separate busy runs and either less than `minDutyCycle`
+  // of it was busy or every run was a single sample (a writer every 2 s).
+  // Real work that is busy half the time in runs of 2 s or more is not.
+  // While periodic, a quiet sample ends an active spell at once, and going
+  // active needs `periodicSamplesToActivate` busy samples in a row (no
+  // single-burst shortcut), so real load on top of the writer still starts
+  // clicking within a few seconds. It stops counting as periodic once the
+  // window no longer holds `periodicRuns` runs, i.e. after up to
+  // `dutyWindow` seconds without the pattern.
+  dutyWindow: 24,
+  minDutyCycle: 0.5,
+  periodicRuns: 3,
+  periodicSamplesToActivate: 3,
   // Throughput that maps to the top level bucket.
   maxBps: 256 * 1024 * 1024,
   // Samples this soon after start are ignored, so the app's own startup I/O
@@ -38,6 +57,29 @@ export function levelForBps(bps, { thresholdBps = DEFAULTS.thresholdBps, maxBps 
 }
 
 /**
+ * Whether a window of busy/quiet samples looks like a periodic writer:
+ * at least `periodicRuns` separate busy runs, and either less than
+ * `minDutyCycle` busy or every run a single sample. See DEFAULTS.
+ * @param {boolean[]} history oldest first
+ */
+export function isPeriodic(history, { periodicRuns, minDutyCycle } = DEFAULTS) {
+  const runs = [];
+  let run = 0;
+  for (const busy of history) {
+    if (busy) {
+      run += 1;
+    } else if (run > 0) {
+      runs.push(run);
+      run = 0;
+    }
+  }
+  if (run > 0) runs.push(run);
+  if (runs.length < periodicRuns) return false;
+  const busyCount = runs.reduce((sum, length) => sum + length, 0);
+  return busyCount < minDutyCycle * history.length || runs.every((length) => length === 1);
+}
+
+/**
  * Feed it samples with update(). It returns the current state when the
  * active/idle state or the level bucket changes, when going idle, and, while
  * active, at most every `refreshMs` with fresh rates; otherwise null.
@@ -59,6 +101,11 @@ export class ActivityModel {
     this.warmedUp = false;
     this.above = 0;
     this.below = 0;
+    // Busy (true) or quiet (false) for the last `dutyWindow` samples, kept
+    // across active and idle spells.
+    this.history = [];
+    // Whether the window looks like a periodic writer (see DEFAULTS).
+    this.periodic = false;
     this.lastReportAt = null;
     this.state = { active: false, level: 0, readBps: 0, writeBps: 0, totalBps: 0 };
   }
@@ -87,12 +134,17 @@ export class ActivityModel {
       this.below += 1;
       this.above = 0;
     }
+    this.history.push(busy);
+    if (this.history.length > o.dutyWindow) this.history.shift();
+    this.periodic = isPeriodic(this.history, o);
 
     let active = this.state.active;
-    if (!active && busy && (this.above >= o.samplesToActivate || total >= o.burstBps)) {
-      active = true;
-    } else if (active && !busy && this.below >= o.samplesToIdle) {
-      active = false;
+    if (!active && busy) {
+      active = this.periodic
+        ? this.above >= o.periodicSamplesToActivate
+        : this.above >= o.samplesToActivate || total >= o.burstBps;
+    } else if (active && !busy) {
+      active = !(this.periodic || this.below >= o.samplesToIdle);
     }
 
     // While active but briefly below the threshold, keep clicking gently.

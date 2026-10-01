@@ -15,6 +15,8 @@ import { ActivityModel } from './activity.js';
 import { SettingsStore, sanitizePatch } from './settings.js';
 import { HIDDEN_ARG, createLoginItem, wasOpenedAtLogin } from './login-item.js';
 import { createTray } from './tray.js';
+import { hasStatusNotifierHost, trayFallback } from './tray-host.js';
+import { trayClickAction } from './tray-click.js';
 
 // ES Module path resolution
 const __filename = fileURLToPath(import.meta.url);
@@ -49,7 +51,11 @@ const EXTERNAL_HOSTS = new Set(['github.com', 'pixabay.com']);
 // opens the latest release in the browser.
 // Not /releases/latest: that skips pre-releases, and every alpha is published as one.
 const RELEASES_URL = 'https://github.com/khawkins98/mac-disk-sounds/releases';
-const WINDOW_COMMANDS = new Set(['close', 'minimize']);
+const WINDOW_COMMANDS = new Set(['close', 'minimize', 'quit']);
+
+// The settings window's size; it is taller when it has to show the
+// "no system tray" note.
+const SETTINGS_SIZE = { width: 400, height: 390, noTrayExtra: 36 };
 
 // Settings the tray menu shows.
 const TRAY_KEYS = ['enabled', 'soundSet', 'launchAtLogin'];
@@ -70,6 +76,11 @@ let readyAt = Infinity;
 // settings window.
 let audioStatus = null;
 let modemPlaying = false;
+// No tray icon can be seen (see tray-host.js): the settings window is then
+// the only way in, so closing it minimises it, and it offers Quit.
+let trayMissing = false;
+// When the settings window last lost the focus (performance.now()).
+let settingsBlurredAt = -Infinity;
 const activity = new ActivityModel();
 
 const isLive = (win) => Boolean(win && !win.isDestroyed());
@@ -196,6 +207,24 @@ const sharedWebPreferences = () => ({
   spellcheck: false
 });
 
+// Neither page has anything to spell check. `spellcheck: false` in
+// webPreferences only stops the pages checking; the session still loads
+// the Hunspell dictionary for the UI language when it is created, and on
+// Windows and Linux that means downloading it from redirector.gvt1.com at
+// every first start. Clearing the session's languages (before any window
+// exists) drops that dictionary and cancels the download; the empty list is
+// saved in the session's preferences, so later starts do not ask for one at
+// all. On macOS the system spell checker is used and the language call is a
+// no-op.
+function disableSpellChecker(ses) {
+  try {
+    ses.setSpellCheckerEnabled(false);
+    if (!IS_MAC) ses.setSpellCheckerLanguages([]);
+  } catch (error) {
+    console.warn('Cannot turn off the spell checker:', error.message);
+  }
+}
+
 // Neither page navigates, opens windows or embeds anything; links go
 // through openExternal.
 function lockDown(webContents) {
@@ -259,11 +288,15 @@ function createAudioWindow() {
   win.loadFile(AUDIO_PAGE).catch((error) => console.error('Cannot load the audio window:', error));
 }
 
-function createSettingsWindow() {
+const settingsHeight = () => SETTINGS_SIZE.height + (trayMissing ? SETTINGS_SIZE.noTrayExtra : 0);
+
+// `minimized`: start in the taskbar rather than on screen (a login start
+// with no tray icon).
+function createSettingsWindow({ minimized = false } = {}) {
   // https://www.electronjs.org/docs/latest/tutorial/custom-window-styles#limitations
   const win = new BrowserWindow({
-    width: 400,
-    height: 390,
+    width: SETTINGS_SIZE.width,
+    height: settingsHeight(),
     show: false,
     frame: false,
     resizable: false,
@@ -282,11 +315,20 @@ function createSettingsWindow() {
     sendTo(win, 'activity', activity.state);
     if (audioStatus) sendTo(win, 'audio-status', audioStatus);
     if (modemPlaying) sendTo(win, 'modem', { playing: true });
+    sendTo(win, 'tray-status', { missing: trayMissing });
   };
   win.on('show', catchUp);
   win.on('restore', catchUp);
+  win.on('blur', () => {
+    if (settingsWindow === win) settingsBlurredAt = performance.now();
+  });
   win.webContents.on('did-finish-load', catchUp);
   win.once('ready-to-show', () => {
+    if (minimized) {
+      win.showInactive();
+      win.minimize();
+      return;
+    }
     win.show();
     // With no Dock icon, macOS does not bring a new window forward on its own.
     if (IS_MAC) {
@@ -302,11 +344,34 @@ function createSettingsWindow() {
     if (!win.isDestroyed()) win.destroy();
   });
 
+  // With no tray to come back from, closing (from the title bar or the
+  // window manager) minimises instead; Quit is in the window.
+  win.on('close', (event) => {
+    if (!trayMissing || quitting) return;
+    event.preventDefault();
+    win.minimize();
+  });
+
   win.on('closed', () => {
     if (settingsWindow === win) settingsWindow = null;
   });
 
   win.loadFile(SETTINGS_PAGE).catch((error) => console.error('Cannot load the settings window:', error));
+}
+
+// The tray check finished: bring a window that is already open into line
+// (it may have been opened, e.g. by a second launch, before the answer).
+function applyTrayMissing(missing) {
+  trayMissing = missing;
+  if (!isLive(settingsWindow)) return;
+  const [width, height] = settingsWindow.getSize();
+  if (width !== SETTINGS_SIZE.width || height !== settingsHeight()) {
+    // A window that is not resizable may refuse a new size on Linux.
+    settingsWindow.setResizable(true);
+    settingsWindow.setSize(SETTINGS_SIZE.width, settingsHeight());
+    settingsWindow.setResizable(false);
+  }
+  sendTo(settingsWindow, 'tray-status', { missing });
 }
 
 function showSettingsWindow() {
@@ -321,8 +386,15 @@ function showSettingsWindow() {
   if (IS_MAC) app.focus({ steal: true });
 }
 
+// A tray icon click: close the window if the user is looking at it,
+// otherwise bring it up (see trayClickAction).
 function toggleSettingsWindow() {
-  if (settingsVisible()) {
+  const action = trayClickAction({
+    visible: settingsVisible(),
+    focused: settingsVisible() && settingsWindow.isFocused(),
+    msSinceBlur: performance.now() - settingsBlurredAt
+  });
+  if (action === 'hide') {
     settingsWindow.close();
   } else {
     showSettingsWindow();
@@ -393,6 +465,11 @@ function registerIpc() {
 
   onMessage('window-control', ['settings'], (command) => {
     if (!WINDOW_COMMANDS.has(command)) return;
+    // Quit is only offered in the window when there is no tray menu.
+    if (command === 'quit') {
+      if (trayMissing) app.quit();
+      return;
+    }
     // There is no Dock to minimise to on macOS (the Dock icon is hidden),
     // so there the second title bar button closes the window too.
     if (command === 'close' || IS_MAC) {
@@ -418,7 +495,8 @@ function registerIpc() {
     audioStatus = { ok };
     if (ok) {
       audioRestartDelay = 1000;
-      console.log(`Audio window ready: ${Number(status.buffers)} sound files decoded.`);
+      const megabytes = (Number(status.decodedBytes) / (1024 * 1024)).toFixed(1);
+      console.log(`Audio window ready: ${megabytes} MB of decoded audio held.`);
     } else {
       console.error('Audio window could not load the sounds:', String(status?.error));
     }
@@ -437,9 +515,10 @@ if (!app.requestSingleInstanceLock()) {
     if (app.isReady() && !argv.includes(HIDDEN_ARG)) showSettingsWindow();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     // The pages need no permissions (audio output is not one).
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    disableSpellChecker(session.defaultSession);
     // No Dock icon: this is a menu bar app. Packaged builds also set
     // LSUIElement (package.json), which hides it before launch; this covers
     // development runs.
@@ -486,9 +565,28 @@ if (!app.requestSingleInstanceLock()) {
 
     applyEnabled(store.get().enabled);
 
+    // On Linux the icon only shows if a StatusNotifierItem host is running.
+    // Find out before showing the window, so it can be sized for the note.
+    const hasHost = tray && process.platform === 'linux' ? await hasStatusNotifierHost() : null;
+    const { trayMissing: missing, startWindow } = trayFallback({
+      platform: process.platform,
+      trayCreated: tray !== null,
+      hasHost,
+      openedAtLogin: wasOpenedAtLogin({ app })
+    });
+    applyTrayMissing(missing);
+    if (missing) {
+      console.warn('No system tray to show the icon in: closing the settings window will minimise it.');
+    }
+
     // Started by hand: show the window so it is clear the app is running.
-    // Started at login: stay in the tray.
-    if (!wasOpenedAtLogin({ app })) showSettingsWindow();
+    // Started at login: stay in the tray, or with no tray, start minimised
+    // so the app can be found in the taskbar.
+    if (startWindow === 'shown') {
+      showSettingsWindow();
+    } else if (startWindow === 'minimized' && !isLive(settingsWindow)) {
+      createSettingsWindow({ minimized: true });
+    }
   });
 
   // The app lives in the tray: closing windows never quits it. Having this

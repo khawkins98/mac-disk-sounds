@@ -6,10 +6,12 @@
 // real sector size.
 const SECTOR_BYTES = 512;
 
-// Whole-disk devices only. Partitions (sda1, nvme0n1p1, mmcblk0p1), loop,
-// ram, device-mapper (dm-*) and zram devices are excluded so the same I/O is
-// not counted twice and virtual devices are ignored.
-const WHOLE_DISK = /^(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme\d+n\d+|mmcblk\d+)$/;
+// Whole-disk devices only: SCSI/SATA/USB (sda), virtio (vda), Xen (xvda),
+// NVMe (nvme0n1), SD/eMMC (mmcblk0), legacy IDE (hda) and User-mode Linux
+// (ubda). Partitions (sda1, hda1, ubda1, nvme0n1p1, mmcblk0p1), loop, ram,
+// device-mapper (dm-*) and zram devices are excluded so the same I/O is not
+// counted twice and virtual devices are ignored.
+const WHOLE_DISK = /^(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|ubd[a-z]+|nvme\d+n\d+|mmcblk\d+)$/;
 
 /**
  * Sum bytes read and written across whole-disk devices in /proc/diskstats.
@@ -81,7 +83,7 @@ const MIB = 1024 * 1024;
  * @param {number[]|null} mbColumns indexes of the MB/s columns from the last
  *   heading line, or null if none has been seen yet
  * @returns {{kind: 'devices', names: string[]} | {kind: 'header', mbColumns: number[]} |
- *   {kind: 'data', totalBps: number} | {kind: 'other'}}
+ *   {kind: 'data', totalBps: number, deviceBps: number[]} | {kind: 'other'}}
  */
 export function parseIostatLine(line, mbColumns) {
   const tokens = line.trim().split(/\s+/).filter(Boolean);
@@ -107,11 +109,48 @@ export function parseIostatLine(line, mbColumns) {
 
   // Without a heading, assume the default KB/t tps MB/s triples.
   const columns = mbColumns ?? tokens.map((_, i) => i).filter((i) => i % 3 === 2);
-  let mbPerSecond = 0;
-  for (const i of columns) {
-    if (i < tokens.length) mbPerSecond += Number(tokens[i]);
+  // One rate per disk, in the order of the device line.
+  const deviceBps = columns.filter((i) => i < tokens.length).map((i) => Number(tokens[i]) * MIB);
+  const totalBps = deviceBps.reduce((sum, bps) => sum + bps, 0);
+  return { kind: 'data', totalBps, deviceBps };
+}
+
+const XML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+const decodeXml = (text) => text.replace(/&(amp|lt|gt|quot|apos);/g, (_, name) => XML_ENTITIES[name]);
+
+/**
+ * The simple values (string, integer, true, false) of an XML property list,
+ * by key. Nested dictionaries are flattened and the first occurrence of a
+ * key wins, which is enough for the top-level keys of `diskutil info
+ * -plist`. Anything unparseable gives {}.
+ * @param {string} xml
+ * @returns {Record<string, string|number|boolean>}
+ */
+export function parsePlistValues(xml) {
+  const values = {};
+  const re = /<key>([^<]*)<\/key>\s*(?:<(string|integer)>([^<]*)<\/\2>|<string\/>|<(true|false)\/>)/g;
+  for (const m of String(xml).matchAll(re)) {
+    const key = decodeXml(m[1]);
+    if (Object.hasOwn(values, key)) continue;
+    if (m[4]) values[key] = m[4] === 'true';
+    else if (m[2] === 'integer') values[key] = Number(m[3]);
+    else values[key] = decodeXml(m[3] ?? '');
   }
-  return { kind: 'data', totalBps: mbPerSecond * MIB };
+  return values;
+}
+
+/**
+ * Whether `diskutil info -plist diskN` describes a mounted disk image
+ * (.dmg, .sparseimage, ...). Reads from a disk image are also counted on
+ * the disk that holds the image file, so iostat would count them twice.
+ * diskutil reports a disk image's protocol as "Disk Image"; the media name
+ * of an image attached by hdiutil is "Apple UDIF ..." or "... Disk Image".
+ * @param {Record<string, string|number|boolean>} info from parsePlistValues
+ */
+export function isDiskImageInfo(info) {
+  if (info.BusProtocol === 'Disk Image') return true;
+  const media = typeof info.MediaName === 'string' ? info.MediaName : '';
+  return info.VirtualOrPhysical === 'Virtual' && /\b(?:UDIF|disk image)\b/i.test(media);
 }
 
 /** Parse one quoted CSV record as typeperf writes it. */
@@ -160,4 +199,46 @@ export function parseTypeperfLine(line) {
   const writeBps = parseTypeperfNumber(fields[2]);
   if (readBps === null || writeBps === null) return { kind: 'other' };
   return { kind: 'data', readBps: Math.max(0, readBps), writeBps: Math.max(0, writeBps) };
+}
+
+/**
+ * Parse one line printed by the PowerShell loop in disk-monitor.js
+ * (CIM_DISK_SCRIPT):
+ *
+ *   MDS,<Timestamp_PerfTime>,<Frequency_PerfTime>,<DiskReadBytesPersec>,<DiskWriteBytesPersec>
+ *
+ * The values are the raw (cumulative) counters of the `_Total` instance of
+ * Win32_PerfRawData_PerfDisk_PhysicalDisk, printed with the invariant
+ * culture, so they are plain unsigned integers on every Windows language.
+ * Anything else (PowerShell noise, a partial line) is 'other'.
+ *
+ * @param {string} line
+ * @returns {{kind: 'data', timestamp: number, frequency: number, readBytes: number, writeBytes: number} | {kind: 'other'}}
+ */
+export function parseCimDiskLine(line) {
+  const fields = line.trim().split(',');
+  if (fields.length !== 5 || fields[0] !== 'MDS') return { kind: 'other' };
+  const numbers = fields.slice(1).map((field) => (/^\d+$/.test(field) ? Number(field) : NaN));
+  if (!numbers.every(Number.isFinite)) return { kind: 'other' };
+  const [timestamp, frequency, readBytes, writeBytes] = numbers;
+  if (!(frequency > 0)) return { kind: 'other' };
+  return { kind: 'data', timestamp, frequency, readBytes, writeBytes };
+}
+
+/**
+ * Rates between two parsed CIM lines. The byte counters are
+ * PERF_COUNTER_BULK_COUNT, timed by the performance counter clock
+ * (Timestamp_PerfTime ticks at Frequency_PerfTime per second). Returns null
+ * when the clock did not move forward (a repeated or reset snapshot); a
+ * counter that went backwards contributes 0.
+ * @returns {{readBps: number, writeBps: number} | null}
+ */
+export function cimDiskRate(prev, curr) {
+  const ticks = curr.timestamp - prev.timestamp;
+  if (!(ticks > 0) || curr.frequency !== prev.frequency) return null;
+  const seconds = ticks / curr.frequency;
+  return {
+    readBps: Math.max(0, curr.readBytes - prev.readBytes) / seconds,
+    writeBps: Math.max(0, curr.writeBytes - prev.writeBytes) / seconds
+  };
 }

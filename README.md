@@ -20,7 +20,7 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 - 💾 Remembers your settings, and can start at login
 - 🤓 Perfect for confusing your coworkers
 - 🎮 Hidden surprises for the curious (hint: some dots like to be clicked...)
-- 🪟 Cross-platform: Linux is tested; disk activity detection on macOS and Windows is new and not yet tested on real machines, and on Windows it currently needs English performance counter names (an English-language Windows install)
+- 🪟 Cross-platform: Linux is tested; disk activity detection on macOS and Windows is new and not yet tested on real machines. On Windows it reads the disk counters through PowerShell and CIM, which works in any display language; if that fails it falls back to `typeperf`, which needs English counter names
 - 🏋️ Dozens or hundreds of MBs to download and make your SSD workout! Thanks Electron!
 
 ## Installation 🚀
@@ -71,9 +71,11 @@ Mac Disk Sounds runs from the menu bar (macOS) or the system tray (Windows and L
 - The version you are running, and **Check for Updates…**, which opens the latest release on GitHub in your browser (the app does not update itself).
 - **Quit**.
 
-Clicking the icon opens or closes the settings window (on Linux most trays only show the menu, so use **Open Settings…**). Closing the window keeps the sounds going; only **Quit** stops the app. Starting the app by hand opens the settings window; starting at login does not. Settings are saved as `settings.json` in the app's user data folder. On Linux, Launch at Login writes `~/.config/autostart/mac-disk-sounds.desktop`.
+Clicking the icon opens the settings window, brings it to the front if other windows cover it, or closes it if it is already in front (on Linux most trays only show the menu, so use **Open Settings…**). Closing the window keeps the sounds going; only **Quit** stops the app. Starting the app by hand opens the settings window; starting at login does not. Settings are saved as `settings.json` in the app's user data folder. On Linux, Launch at Login writes `~/.config/autostart/mac-disk-sounds.desktop`.
 
-Power use on macOS: while the disk is busy and the sounds are enabled, the app holds a "prevent app suspension" power assertion so App Nap cannot delay the clicks; it is released as soon as the disk goes quiet or the sounds are turned off. Separately, like any Chromium-based app, macOS is kept out of idle sleep while sound is actually playing, which includes the ambience. Set the ambience to 0 (or turn the sounds off) if you want your Mac to idle-sleep while the app runs; the display can sleep either way.
+On Linux the tray icon needs a StatusNotifierItem host (KDE, XFCE, Cinnamon, MATE and Ubuntu have one; stock GNOME needs the AppIndicator extension). If the app finds none at startup, the settings window says so and has a **Quit** button, and closing the window minimises it instead, so the app cannot end up running with no way back to it. Started at login with no tray, the window starts minimised, so the app can be found in the taskbar.
+
+Power use on macOS: while the disk is busy and the sounds are enabled, the app holds a "prevent app suspension" power assertion so App Nap cannot delay the clicks; it is released as soon as the disk goes quiet or the sounds are turned off. A disk that is only touched in short, regular bursts (say a background service writing every few seconds) counts as quiet once the pattern shows up, within about 30 seconds; it clicks again when the disk stays busy for a few seconds in a row. Separately, like any Chromium-based app, macOS is kept out of idle sleep while sound is actually playing, which includes the ambience. Set the ambience to 0 (or turn the sounds off) if you want your Mac to idle-sleep while the app runs; the display can sleep either way.
 
 ## Building from Source 🛠️
 

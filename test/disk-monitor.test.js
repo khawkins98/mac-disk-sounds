@@ -4,7 +4,24 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
-import { DiskMonitor, cleanRate } from '../src/main/disk-monitor.js';
+import { readFileSync } from 'node:fs';
+import { DiskMonitor, cleanRate, CIM_DISK_SCRIPT, POWERSHELL_ARGS, findDiskImages } from '../src/main/disk-monitor.js';
+
+const MIB = 1024 * 1024;
+const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
+
+// A stand-in for execFile('/usr/sbin/diskutil', ['info', '-plist', name]).
+// `disks` maps a disk name to plist text or an Error; unknown disks get the
+// internal SSD's plist.
+function fakeDiskutil(disks = {}) {
+  const calls = [];
+  const execFile = (command, args, _options, callback) => {
+    calls.push([command, ...args]);
+    const result = disks[args[2]] ?? fixture('diskutil-info-disk0.plist');
+    setImmediate(() => (result instanceof Error ? callback(result, '', '') : callback(null, result, '')));
+  };
+  return { execFile, calls };
+}
 
 const quietLogger = () => {
   const calls = [];
@@ -87,7 +104,7 @@ test('linux: a disk appearing starts a new baseline instead of a burst', async (
 
 test('darwin: one iostat process, skips the since-boot line, sums MB/s', async () => {
   const { spawn, children } = fakeSpawn();
-  const monitor = new DiskMonitor({ platform: 'darwin', spawn, logger: quietLogger() });
+  const monitor = new DiskMonitor({ platform: 'darwin', spawn, execFile: fakeDiskutil().execFile, logger: quietLogger() });
   const samples = [];
   monitor.on('sample', (s) => samples.push(s));
   monitor.start();
@@ -114,9 +131,9 @@ test('darwin: one iostat process, skips the since-boot line, sums MB/s', async (
   assert.equal(children.length, 1, 'no restart after stop()');
 });
 
-test('win32: one typeperf process with both counters', async () => {
+test('win32 (typeperf forced): one typeperf process with both counters', async () => {
   const { spawn, children } = fakeSpawn();
-  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger() });
+  const monitor = new DiskMonitor({ platform: 'win32', windowsBackend: 'typeperf', spawn, logger: quietLogger() });
   const samples = [];
   monitor.on('sample', (s) => samples.push(s));
   monitor.start();
@@ -137,10 +154,135 @@ test('win32: one typeperf process with both counters', async () => {
   assert.equal(children[0].killed, true);
 });
 
+test('win32: one long-lived PowerShell reading raw CIM counters, rates from the counter clock', async () => {
+  const { spawn, children } = fakeSpawn();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger(), env: { SystemRoot: 'D:\\Win' } });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s));
+  monitor.start();
+
+  assert.equal(children.length, 1);
+  assert.equal(children[0].command, 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  assert.deepEqual(children[0].args, POWERSHELL_ARGS);
+  assert.deepEqual(POWERSHELL_ARGS.slice(0, -1), ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command']);
+  // Only untranslated WMI names, and nothing the Windows command line would
+  // need to escape.
+  assert.match(CIM_DISK_SCRIPT, /Win32_PerfRawData_PerfDisk_PhysicalDisk/);
+  assert.match(CIM_DISK_SCRIPT, /\[Console\]::Out\.Flush\(\)/);
+  assert.match(CIM_DISK_SCRIPT, /InvariantCulture/);
+  assert.doesNotMatch(CIM_DISK_SCRIPT, /["\\\n]/);
+  // One CIM session for the whole loop, used by every query.
+  assert.match(CIM_DISK_SCRIPT, /New-CimSession -SessionOption \(New-CimSessionOption -Protocol Dcom\)/);
+  assert.match(CIM_DISK_SCRIPT, /while \(\$true\) \{ \$d = Get-CimInstance @q /);
+
+  const out = children[0].stdout;
+  out.write('MDS,1000000000,10000000,5000,7000\r\n'); // baseline only
+  out.write('MDS,1010000000,10000000,1053576,7000\r\nMDS,1015000000,10000');
+  out.write('000,1053576,531288\r\n');
+  out.write('MDS,1015000000,10000000,1053576,531288\r\n'); // same snapshot: ignored
+  await delay(5);
+  assert.deepEqual(samples.map((s) => [s.readBps, s.writeBps]), [[MIB, 0], [0, MIB]]);
+  monitor.stop();
+  assert.equal(children[0].killed, true);
+});
+
+const isPowerShell = (child) => /powershell\.exe$/.test(child.command);
+const isTypeperf = (child) => /typeperf\.exe$/.test(child.command);
+const TYPEPERF_LINE = (read) => `"10/01/2026 09:15:02.125","${read}.0","0.0"\r\n`;
+
+test('win32: a slow PowerShell start gets typeperf meanwhile, and CIM takes over once it delivers', async () => {
+  const { spawn, children } = fakeSpawn();
+  const logger = quietLogger();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger, windowsFallbackMs: 30 });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s.readBps));
+  monitor.start();
+  const powershell = children[0];
+  // PowerShell is slow: only a baseline by the fallback time.
+  powershell.stdout.write('MDS,1000000000,10000000,5000,7000\r\n');
+  await delay(60);
+
+  const typeperf = children.find(isTypeperf);
+  assert.ok(typeperf, 'typeperf started');
+  assert.equal(powershell.killed, false, 'PowerShell keeps running');
+  typeperf.stdout.write(TYPEPERF_LINE(2048));
+  await delay(5);
+  assert.deepEqual(samples, [2048]);
+  assert.equal(logger.calls.filter(([level, text]) => level === 'warn' && /using typeperf/.test(text)).length, 1);
+
+  // PowerShell finally delivers: its sample counts and typeperf is stopped.
+  powershell.stdout.write('MDS,1010000000,10000000,1053576,7000\r\n');
+  await delay(5);
+  assert.equal(typeperf.killed, true);
+  // A late line from the stopped typeperf does not count.
+  typeperf.stdout.write(TYPEPERF_LINE(4096));
+  powershell.stdout.write('MDS,1020000000,10000000,1053576,7000\r\n');
+  await delay(5);
+  assert.deepEqual(samples, [2048, MIB, 0]);
+  assert.equal(children.filter(isTypeperf).length, 1);
+  monitor.stop();
+  assert.equal(powershell.killed, true);
+});
+
+test('win32: a PowerShell that fails starts typeperf at once, and is retried until it works', async () => {
+  const { spawn, children } = fakeSpawn();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger(), windowsFallbackMs: 60000, backoffMs: { initial: 20 } });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s.readBps));
+  monitor.start();
+  children[0].emit('error', new Error('spawn powershell.exe ENOENT'));
+  await delay(5);
+  const typeperf = children.find(isTypeperf);
+  assert.ok(typeperf, 'typeperf started without waiting for the fallback time');
+  typeperf.stdout.write(TYPEPERF_LINE(100));
+  await delay(5);
+  assert.deepEqual(samples, [100]);
+
+  // The retried PowerShell works this time.
+  while (children.filter(isPowerShell).length < 2) await delay(2);
+  const retried = children.filter(isPowerShell)[1];
+  retried.stdout.write('MDS,0,10000000,0,0\r\nMDS,10000000,10000000,300,0\r\n');
+  await delay(5);
+  assert.equal(typeperf.killed, true);
+  assert.deepEqual(samples, [100, 300]);
+
+  // If it dies again later, typeperf covers again (one typeperf at a time).
+  retried.emit('exit', 1, null);
+  await delay(5);
+  assert.equal(children.filter((c) => isTypeperf(c) && !c.killed).length, 1);
+  monitor.stop();
+  assert.ok(children.every((c) => c.killed || c === children[0] || c === retried));
+});
+
+test('win32: no fallback once PowerShell/CIM has delivered a sample', async () => {
+  const { spawn, children } = fakeSpawn();
+  const logger = quietLogger();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger, windowsFallbackMs: 30 });
+  let samples = 0;
+  monitor.on('sample', () => samples++);
+  monitor.start();
+  children[0].stdout.write('MDS,1000000000,10000000,5000,7000\r\nMDS,1010000000,10000000,6000,7000\r\n');
+  await delay(60);
+  assert.equal(samples, 1);
+  assert.equal(children.length, 1);
+  assert.equal(children[0].killed, false);
+  assert.deepEqual(logger.calls, []);
+  monitor.stop();
+});
+
+test('win32: stopping before the fallback time cancels the fallback', async () => {
+  const { spawn, children } = fakeSpawn();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger(), windowsFallbackMs: 20 });
+  monitor.start();
+  monitor.stop();
+  await delay(50);
+  assert.equal(children.length, 1);
+});
+
 test('restarts a process that exits unexpectedly, with backoff', async () => {
   const { spawn, children } = fakeSpawn();
   const logger = quietLogger();
-  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger, backoffMs: { initial: 40, max: 160 } });
+  const monitor = new DiskMonitor({ platform: 'win32', windowsBackend: 'typeperf', spawn, logger, backoffMs: { initial: 40, max: 160 } });
   monitor.start();
 
   children[0].emit('exit', 1, null);
@@ -169,6 +311,7 @@ test('a crash loop keeps backing off even if it emits samples, and logs once', a
   let clock = 0;
   const monitor = new DiskMonitor({
     platform: 'win32',
+    windowsBackend: 'typeperf',
     spawn,
     logger,
     now: () => clock,
@@ -210,7 +353,7 @@ test('a crash loop keeps backing off even if it emits samples, and logs once', a
 
 test('samples from a replaced child or a stopped monitor are dropped', async () => {
   const { spawn, children } = fakeSpawn();
-  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger(), backoffMs: { initial: 5 } });
+  const monitor = new DiskMonitor({ platform: 'win32', windowsBackend: 'typeperf', spawn, logger: quietLogger(), backoffMs: { initial: 5 } });
   const samples = [];
   monitor.on('sample', (s) => samples.push(s.readBps));
   monitor.start();
@@ -238,7 +381,7 @@ test('cleanRate turns NaN, negative and infinite rates into 0 and keeps null', (
 
 test('darwin: a change in the disk set skips the next report (no fake burst)', async () => {
   const { spawn, children } = fakeSpawn();
-  const monitor = new DiskMonitor({ platform: 'darwin', spawn, logger: quietLogger() });
+  const monitor = new DiskMonitor({ platform: 'darwin', spawn, execFile: fakeDiskutil().execFile, logger: quietLogger() });
   const samples = [];
   monitor.on('sample', (s) => samples.push(s.totalBps / (1024 * 1024)));
   monitor.start();
@@ -256,6 +399,74 @@ test('darwin: a change in the disk set skips the next report (no fake burst)', a
   await delay(5);
   monitor.stop();
   assert.deepEqual(samples, [1, 1.25, 2]);
+});
+
+test('darwin: a mounted disk image is not counted again, checked once per device-set change', async () => {
+  const { spawn, children } = fakeSpawn();
+  const diskutil = fakeDiskutil({ disk4: fixture('diskutil-info-dmg.plist') });
+  const logger = quietLogger();
+  const monitor = new DiskMonitor({ platform: 'darwin', spawn, execFile: diskutil.execFile, logger });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s.totalBps / MIB));
+  monitor.start();
+  const out = children[0].stdout;
+
+  out.write('              disk0               disk4 \n    KB/t  tps  MB/s     KB/t  tps  MB/s \n');
+  out.write('   21.89   38 50.00    18.00    0  0.00 \n'); // since boot: ignored
+  await delay(10);
+  assert.deepEqual(diskutil.calls, [
+    ['/usr/sbin/diskutil', 'info', '-plist', 'disk0'],
+    ['/usr/sbin/diskutil', 'info', '-plist', 'disk4']
+  ]);
+  // Reading 40 MB/s from the image is also 40 MB/s (compressed: less) on
+  // disk0, which holds the image file.
+  out.write('   64.00  640 40.00    64.00  640 40.00 \n');
+  // The same device line reprinted: no new diskutil calls.
+  out.write('              disk0               disk4 \n    KB/t  tps  MB/s     KB/t  tps  MB/s \n');
+  out.write('   16.00    3  1.00    16.00    3  1.00 \n');
+  await delay(10);
+  assert.equal(diskutil.calls.length, 2);
+
+  // The image is ejected: one disk left, checked again.
+  out.write('              disk0 \n    KB/t  tps  MB/s \n');
+  out.write('   16.00    3  9.00 \n'); // skipped after the change
+  out.write('   16.00    3  2.00 \n');
+  await delay(10);
+  assert.equal(diskutil.calls.length, 3);
+  monitor.stop();
+
+  assert.deepEqual(samples, [40, 1, 2]);
+  assert.ok(logger.calls.some(([level, text]) => level === 'log' && /Not counting disk images.*disk4/.test(text)));
+  assert.ok(logger.calls.every(([level]) => level === 'log'), 'nothing above log level');
+});
+
+test('darwin: if diskutil fails, every disk is counted', async () => {
+  const { spawn, children } = fakeSpawn();
+  const diskutil = fakeDiskutil({ disk0: new Error('diskutil: timed out'), disk4: new Error('ENOENT') });
+  const monitor = new DiskMonitor({ platform: 'darwin', spawn, execFile: diskutil.execFile, logger: quietLogger() });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s.totalBps / MIB));
+  monitor.start();
+  const out = children[0].stdout;
+  out.write('              disk0               disk4 \n    KB/t  tps  MB/s     KB/t  tps  MB/s \n   1 1 1.00 1 1 1.00 \n');
+  await delay(10);
+  out.write('   64.00  640 40.00    64.00  640 40.00 \n');
+  await delay(5);
+  monitor.stop();
+  assert.deepEqual(samples, [80]);
+});
+
+test('findDiskImages: only diskN names are asked about, and a throwing execFile counts everything', async () => {
+  const diskutil = fakeDiskutil({ disk5: fixture('diskutil-info-dmg.plist') });
+  const logger = quietLogger();
+  const found = await findDiskImages(['disk0', 'disk5', 'cd0', 'disk2s1'], { execFile: diskutil.execFile, logger });
+  assert.deepEqual([...found], ['disk5']);
+  assert.deepEqual(diskutil.calls.map((call) => call.at(-1)), ['disk0', 'disk5']);
+
+  const throwing = () => {
+    throw new Error('spawn EAGAIN');
+  };
+  assert.deepEqual([...await findDiskImages(['disk0', 'disk4'], { execFile: throwing, logger })], []);
 });
 
 test('unsupported platforms emit nothing and log once', async () => {

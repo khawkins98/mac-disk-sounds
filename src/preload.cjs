@@ -33,8 +33,11 @@ contextBridge.exposeInMainWorld('diskSounds', {
 
   // --- Settings window ---
 
-  /** 'close' or 'minimize'. */
+  /** 'close', 'minimize', or 'quit' (honoured only when there is no tray). */
   windowControl: (command) => ipcRenderer.send('window-control', String(command)),
+
+  /** Called with {missing} when the window is shown: true if no tray icon can be seen. */
+  onTrayStatus: (callback) => subscribe('tray-status', callback),
 
   /** Open an allowlisted https URL in the default browser. */
   openExternal: (url) => ipcRenderer.send('open-external', String(url)),
@@ -56,6 +59,6 @@ contextBridge.exposeInMainWorld('diskSounds', {
   /** Report that the dial-up clip started (true) or ended (false). */
   reportModem: (playing) => ipcRenderer.send('modem:state', Boolean(playing)),
 
-  /** Report {ok, buffers?, error?} after loading the sounds. */
+  /** Report {ok, decodedBytes?, error?} after (re)loading the sounds. */
   reportAudioStatus: (status) => ipcRenderer.send('audio:status', status)
 });
