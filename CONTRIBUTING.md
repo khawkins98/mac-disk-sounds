@@ -108,6 +108,13 @@ section as its notes. It builds macOS (universal), Windows and Linux, and
 publishes the release only once all three have uploaded. Versions with a `-`
 (e.g. `1.2.0-beta.1`) are published as pre-releases.
 
+Don't create the release by hand on GitHub: push the tag and let the
+workflow make it. If a release was published by hand before its files were
+built, run the **Release** workflow from the Actions tab with **Run
+workflow**, giving it the tag (e.g. `v1.1.0`). It turns the empty release
+back into a draft with the CHANGELOG notes, builds every platform, and
+publishes it again.
+
 ## License
 
 By contributing you agree that your contributions are licensed under the
