@@ -45,6 +45,10 @@ const PAGE_PATHS = {
 
 // Hosts the settings page links to. Anything else is refused.
 const EXTERNAL_HOSTS = new Set(['github.com', 'pixabay.com']);
+// The app is unsigned and does not update itself: "Check for Updates…"
+// opens the latest release in the browser.
+// Not /releases/latest: that skips pre-releases, and every alpha is published as one.
+const RELEASES_URL = 'https://github.com/khawkins98/mac-disk-sounds/releases';
 const WINDOW_COMMANDS = new Set(['close', 'minimize']);
 
 // Settings the tray menu shows.
@@ -372,6 +376,16 @@ function allowedExternalUrl(value) {
   }
 }
 
+// Open a link in the default browser, if it is allowed.
+function openExternal(url) {
+  const href = allowedExternalUrl(url);
+  if (!href) {
+    console.warn('Refusing to open external URL:', url);
+    return;
+  }
+  shell.openExternal(href).catch((error) => console.error('Cannot open', href, error.message));
+}
+
 function registerIpc() {
   onInvoke('settings:get', ['settings', 'audio'], () => store.get());
   // Once quitting has begun, changes would not be saved reliably; ignore them.
@@ -388,14 +402,7 @@ function registerIpc() {
     }
   });
 
-  onMessage('open-external', ['settings'], (url) => {
-    const href = allowedExternalUrl(url);
-    if (!href) {
-      console.warn('Refusing to open external URL:', url);
-      return;
-    }
-    shell.openExternal(href);
-  });
+  onMessage('open-external', ['settings'], openExternal);
 
   onMessage('modem:play', ['settings'], () => {
     if (store.get().enabled) sendTo(audioWindow, 'modem:command', null);
@@ -463,7 +470,13 @@ if (!app.requestSingleInstanceLock()) {
         iconDir: TRAY_ICON_DIR,
         settings: store.get(),
         loginItemSupported: loginItem.supported,
-        actions: { setSettings, openSettings: showSettingsWindow, quit: () => app.quit() },
+        version: app.getVersion(),
+        actions: {
+          setSettings,
+          openSettings: showSettingsWindow,
+          checkForUpdates: () => openExternal(RELEASES_URL),
+          quit: () => app.quit()
+        },
         onClick: toggleSettingsWindow
       });
       console.log('Tray icon created.');

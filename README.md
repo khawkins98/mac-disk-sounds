@@ -1,8 +1,10 @@
 # 🎶 Mac Disk Sounds 💾
 
+<img src="build/icon.png" alt="The Mac Disk Sounds icon: a hard disk with its lid off" width="128" height="128">
+
 _Because your modern computer deserves to sound like it's from 1999_
 
-[![Download Now](https://img.shields.io/github/v/release/khawkins98/mac-disk-sounds?label=Download%20Now&style=for-the-badge)](https://github.com/khawkins98/mac-disk-sounds/releases)
+[![Download Now](https://img.shields.io/github/v/release/khawkins98/mac-disk-sounds?include_prereleases&label=Download%20Now&style=for-the-badge)](https://github.com/khawkins98/mac-disk-sounds/releases)
 
 ## What is this madness? 🤔
 
@@ -25,18 +27,23 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 
 ### macOS
 
-1. Download the latest `.dmg` from the releases page
+1. Download the latest `.dmg` from the releases page (or the `-mac.zip`, which holds the same app). There is one download for every Mac: it is a universal app that runs natively on both Apple silicon and Intel Macs (so the download is about twice the size of a single-architecture build).
 2. Drag the app to your Applications folder
 3. Open it and enjoy the sweet sounds of yesteryear!
 
-#### Note for macOS Users
+#### The app is not signed
 
-If you see a message saying the app "is damaged and can't be opened" this is because I don't have the $99 annual developer license from Apple. After dragging the app to your Applications folder, you can work around this by removing the quarantine flag:
+Mac Disk Sounds is **not signed or notarised** by Apple (that needs a $99 a year developer membership). macOS quarantines anything downloaded from the internet, and for an unsigned app it then refuses to open it, usually saying the app "is damaged and can't be opened" (it is not damaged). After dragging the app to your Applications folder, remove the quarantine flag in Terminal:
 
-   ```bash
-   xattr -dr com.apple.quarantine "/Applications/Mac Disk Sounds.app"
-   ```
-   Then try opening the app normally.
+```bash
+xattr -dr com.apple.quarantine "/Applications/Mac Disk Sounds.app"
+```
+
+Then open the app normally. You need to do this again after installing each new version. (`xattr -dr` removes the `com.apple.quarantine` attribute from the app and everything inside it; it changes nothing else.)
+
+#### Updates
+
+The app does not update itself. To see whether there is a newer version, choose **Check for Updates…** from its menu bar menu: it opens the [releases page](https://github.com/khawkins98/mac-disk-sounds/releases) on GitHub (newest first, pre-releases included), and the menu item above it shows the version you have. To update, quit the app, install the new version over the old one as above and run the `xattr` command again.
 
 ### Windows
 
@@ -61,6 +68,7 @@ Mac Disk Sounds runs from the menu bar (macOS) or the system tray (Windows and L
 - **Sound Set**: which recorded drive the clicks come from.
 - **Open Settings…**: the System 7 window with the activity lights, the sound set and the click and ambience volumes.
 - **Launch at Login** (installed builds only).
+- The version you are running, and **Check for Updates…**, which opens the latest release on GitHub in your browser (the app does not update itself).
 - **Quit**.
 
 Clicking the icon opens or closes the settings window (on Linux most trays only show the menu, so use **Open Settings…**). Closing the window keeps the sounds going; only **Quit** stops the app. Starting the app by hand opens the settings window; starting at login does not. Settings are saved as `settings.json` in the app's user data folder. On Linux, Launch at Login writes `~/.config/autostart/mac-disk-sounds.desktop`.
@@ -92,6 +100,13 @@ node scripts/smoke-monitor.mjs
 # Redraw the tray icons in assets/tray/ (only after changing the script)
 node scripts/make-tray-icons.mjs
 
+# Redraw the app icon: build/icon.png, icon.icns and icon.ico
+# (only after changing the script; the tests check they match it)
+node scripts/make-app-icon.mjs
+
+# Check the electron-builder config points at real files
+node scripts/check-build-config.mjs
+
 # Build for your platform
 npm run build        # Builds for all platforms (macOS, Windows, Linux)
 npm run build:mac    # Builds for macOS only
@@ -110,8 +125,10 @@ src/renderer/    the settings window (index.html, renderer.js, styles.css),
                  and the vendored system.css
 assets/sounds/   the sound files and their credits
 assets/tray/     tray icons, drawn by scripts/make-tray-icons.mjs
-build/           app icons used by electron-builder
-scripts/         icon generator and the disk monitor smoke test
+build/           app icons used by electron-builder, drawn by
+                 scripts/make-app-icon.mjs
+scripts/         icon generators, the build config check and the disk
+                 monitor smoke test
 test/            node --test unit tests
 ```
 
