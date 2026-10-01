@@ -92,6 +92,9 @@ async function enable() {
     return;
   }
   if (current !== generation || !settings.enabled) return;
+  // Only start() plays the start-up clip; this load may have shared a
+  // start-up decode still under way.
+  audio.dropStartup();
   audio.startBackground();
   ready = true;
   updateScheduler();

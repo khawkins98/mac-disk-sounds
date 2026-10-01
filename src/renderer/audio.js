@@ -168,6 +168,14 @@ export class AudioEngine {
     return pick(await this.#decode(file));
   }
 
+  /**
+   * Drop the start-up clip if it was decoded but will not be played (the
+   * sounds were turned off and on again while the first decode ran).
+   */
+  dropStartup() {
+    if (this.sounds) this.sounds.startup = null;
+  }
+
   /** Bytes of decoded audio held now. */
   get decodedBytes() {
     const s = this.sounds;
