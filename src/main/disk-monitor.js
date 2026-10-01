@@ -465,7 +465,8 @@ export async function findDiskImages(names, { execFile = nodeExecFile, timeoutMs
           resolve(false);
           return;
         }
-        resolve(isDiskImageInfo(parsePlistValues(String(stdout))));
+        const info = parsePlistValues(String(stdout));
+        resolve(isDiskImageInfo(info) ? info : false);
       });
     } catch (error) {
       logger.log(`Cannot run diskutil (${error.message}); counting every disk.`);
@@ -473,7 +474,13 @@ export async function findDiskImages(names, { execFile = nodeExecFile, timeoutMs
     }
   })));
   const images = new Set(names.filter((_, i) => results[i]));
-  if (images.size > 0) logger.log(`Not counting disk images (already counted on the disk holding them): ${[...images].join(', ')}`);
+  if (images.size > 0) {
+    const described = names.flatMap((name, i) => {
+      const info = results[i];
+      return info ? [`${name} (BusProtocol=${info.BusProtocol}, VirtualOrPhysical=${info.VirtualOrPhysical}, MediaName=${info.MediaName})`] : [];
+    });
+    logger.log(`Not counting disk images (already counted on the disk holding them): ${described.join(', ')}`);
+  }
   return images;
 }
 

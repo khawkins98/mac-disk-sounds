@@ -32,12 +32,10 @@
 	<false/>
 	<key>IOKitSize</key>
 	<integer>254803968</integer>
-	<key>IORegistryEntryName</key>
-	<string>Apple UDIF read-only compressed (zlib) Media</string>
 	<key>Internal</key>
 	<false/>
 	<key>MediaName</key>
-	<string>Apple UDIF read-only compressed (zlib)</string>
+	<string>Disk Image</string>
 	<key>MediaType</key>
 	<string>Generic</string>
 	<key>OSInternalMedia</key>
