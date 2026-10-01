@@ -58,7 +58,17 @@ jobs:
             fi
             echo "Reusing existing draft release $TAG"
           else
-            gh release create "$TAG" --draft --verify-tag --title "$TAG" --generate-notes
+            # Use this version's CHANGELOG.md section as the notes, if it has one.
+            awk -v v="${TAG#v}" '
+              /^## \[/ { if (found) exit; found = index($0, "## [" v "]") == 1; next }
+              found
+            ' CHANGELOG.md > release-notes.md
+            if grep -q '[^[:space:]]' release-notes.md; then
+              gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file release-notes.md
+            else
+              echo "::warning::No CHANGELOG.md section for ${TAG#v}; using generated notes"
+              gh release create "$TAG" --draft --verify-tag --title "$TAG" --generate-notes
+            fi
           fi
 
   release:

@@ -136,22 +136,11 @@ test/            node --test unit tests
 
 ## Publishing Releases 📦
 
-When you want to create a new release, follow these steps:
+See [CONTRIBUTING.md](CONTRIBUTING.md#releasing-maintainers) for the release steps. In short: move the **Unreleased** notes in [CHANGELOG.md](CHANGELOG.md) under the new version, set the same version in `package.json`, merge to `main`, then push a matching `v*` tag. The release workflow builds macOS (universal), Windows and Linux. It publishes one GitHub release, using that version's CHANGELOG section as the notes, only once all three platforms have uploaded. It uses the repository's built-in `GITHUB_TOKEN`; no personal access token is needed.
 
-- Update the version in your project's package.json file (e.g. 1.2.3)
-- Commit that change (`git commit -am v1.2.3`)
-- Tag your commit (`git tag v1.2.3`). Make sure your tag name's format is v*.*.\*.
-  - Your workflow will use this tag to detect when to create a release
-- Push your changes to GitHub (`git push && git push --tags`)
+## Contributing 🤝
 
-The release process will:
-
-- Build packages for all platforms
-- Create a GitHub release
-- Upload all assets
-- Tag the release with the version from package.json
-
-The release workflow publishes with the repository's built-in `GITHUB_TOKEN`; no personal access token is needed.
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Why? 🤷‍♂️
 
