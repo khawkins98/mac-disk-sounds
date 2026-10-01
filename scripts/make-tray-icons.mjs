@@ -1,10 +1,11 @@
 // Draws the tray icons into assets/tray/ as PNGs. No dependencies: the glyph
-// is drawn with supersampled coverage and written with a minimal PNG encoder.
+// is drawn with supersampled coverage and written with the minimal PNG
+// encoder in png.mjs.
 //
 //   node scripts/make-tray-icons.mjs
 //
-// The glyph is a side-on hard disk like the app icon (build/icon.png): a
-// rounded rectangle with an activity LED.
+// The glyph is a side-on hard disk: a rounded rectangle with an activity
+// LED, like the one on the app icon (scripts/make-app-icon.mjs).
 // - trayTemplate.png / @2x (16 / 32 px): black plus alpha only. macOS treats
 //   a "...Template" image as a template and recolours it for light and dark
 //   menu bars.
@@ -13,9 +14,9 @@
 //   green LED reads on both.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { deflateSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { encodePng } from './png.mjs';
 
 const OUT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'tray');
 const SUPERSAMPLE = 8;
@@ -89,50 +90,6 @@ function render(size, style) {
     }
   }
   return pixels;
-}
-
-// --- Minimal PNG encoder (8-bit RGBA, no interlace) ---
-
-const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
-  let c = n;
-  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-  return c >>> 0;
-});
-
-function crc32(buffer) {
-  let c = 0xffffffff;
-  for (const byte of buffer) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
-
-function chunk(type, data) {
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length);
-  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(body));
-  return Buffer.concat([length, body, crc]);
-}
-
-function encodePng(width, height, rgba) {
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0);
-  header.writeUInt32BE(height, 4);
-  header[8] = 8; // bit depth
-  header[9] = 6; // colour type: RGBA
-  // compression, filter and interlace methods stay 0
-  const stride = width * 4;
-  const raw = Buffer.alloc((stride + 1) * height);
-  for (let y = 0; y < height; y++) {
-    raw[y * (stride + 1)] = 0; // filter: none
-    Buffer.from(rgba.buffer, rgba.byteOffset + y * stride, stride).copy(raw, y * (stride + 1) + 1);
-  }
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', header),
-    chunk('IDAT', deflateSync(raw, { level: 9 })),
-    chunk('IEND', Buffer.alloc(0))
-  ]);
 }
 
 mkdirSync(OUT_DIR, { recursive: true });
