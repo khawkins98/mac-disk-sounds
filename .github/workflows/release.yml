@@ -1,17 +1,13 @@
 name: Release
 
 on:
-  # push:
-  #   branches:
-  #     - '*'
   push:
     tags:
       - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
 
-# Add permissions for the GitHub token
+# electron-builder creates the GitHub release and uploads assets
 permissions:
   contents: write
-  packages: write
 
 jobs:
   release:
@@ -20,39 +16,28 @@ jobs:
 
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: win
 
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0  # Fetch all history for all branches and tags
 
       - name: Install Node.js
         uses: actions/setup-node@v7
         with:
           node-version: 24.x
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Install dmg-license (macOS only)
-        if: matrix.os == 'macos-latest'
-        run: npm install dmg-license --save-dev
-
-      - name: Clean up existing release assets
-        if: github.event_name == 'push' && github.event.tag_name != ''
-        run: |
-          gh release delete-asset ${{ github.event.tag_name }} -y || true
+      - name: Build and publish
+        run: npx electron-builder --${{ matrix.platform }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build/Release Electron app
-        uses: samuelmeuli/action-electron-builder@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          release: ${{ github.event_name == 'push' && github.event.tag_name != '' }}
-          build_script_name: ${{ matrix.os == 'macos-latest' && 'build:mac' || matrix.os == 'windows-latest' && 'build:win' || 'build:linux' }}
-          skip_build: false
-          max_attempts: 3
-          args: --config.compression=store
