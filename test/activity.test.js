@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ActivityModel, levelForBps, DEFAULTS } from '../activity.js';
+import { ActivityModel, levelForBps, DEFAULTS } from '../src/main/activity.js';
 
 const KIB = 1024;
 const MIB = 1024 * KIB;

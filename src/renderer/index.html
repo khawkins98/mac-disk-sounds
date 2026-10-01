@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; media-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Mac Disk Sounds</title>
+  <!-- @sakun/system.css v0.1.11 (MIT), vendored; see vendor/system.css/LICENSE and README.md -->
+  <link rel="stylesheet" href="vendor/system.css/system.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="window" id="main-window">
+    <div class="title-bar">
+      <button aria-label="Close" class="close"></button>
+      <h1 class="title">Mac Disk Sounds</h1>
+      <button aria-label="Resize" class="resize"></button>
+    </div>
+
+    <div class="window-pane">
+
+      <div class="status-container" title="Disk activity">
+        &#9201;
+        <div class="status" id="activity-indicator-1"></div>
+        <div class="status" id="activity-indicator-2"></div>
+        <div class="status" id="activity-indicator-3"></div>
+        <div class="status" id="activity-indicator-4"></div>
+        <div class="status" id="activity-indicator-5"></div>
+      </div>
+
+      <div id="disk-speed" class="speed-indicator"></div>
+
+      <div class="field-row enabled-row">
+        <input type="checkbox" id="enabled">
+        <label for="enabled">Enabled</label>
+      </div>
+
+      <div class="field-row">
+        <label for="sound-set">Sound Set:</label>
+        <select id="sound-set">
+          <option value="generic">Computer Hard Drive Access</option>
+          <option value="ibm">IBM Hard Drive (1999)</option>
+        </select>
+      </div>
+
+      <div class="field-row">
+        <div class="volume-control-group">
+          <label for="click-volume">Clicks:</label>
+          <div class="volume-slider-container">
+            <div class="volume-numbers">
+              <span>0</span>
+              <span>1</span>
+              <span>2</span>
+              <span>3</span>
+              <span>4</span>
+              <span>5</span>
+              <span>6</span>
+              <span>7</span>
+            </div>
+            <input type="range" min="0" max="7" value="4" class="volume-slider" id="click-volume" aria-label="Click volume">
+          </div>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="volume-control-group">
+          <label for="ambience-volume">Ambience:</label>
+          <div class="volume-slider-container">
+            <div class="volume-numbers">
+              <span>0</span>
+              <span>1</span>
+              <span>2</span>
+              <span>3</span>
+              <span>4</span>
+              <span>5</span>
+              <span>6</span>
+              <span>7</span>
+            </div>
+            <input type="range" min="0" max="7" value="2" class="volume-slider" id="ambience-volume" aria-label="Background ambience volume">
+          </div>
+        </div>
+      </div>
+
+      <div class="description">
+        The classic sounds of a real computer. <a href="https://github.com/khawkins98/mac-disk-sounds">GitHub</a>
+      </div>
+
+      <div class="credits">
+        Sound effects from Pixabay:<br>
+        <a href="https://pixabay.com/sound-effects/hard-disk-drive-ibm-1999-48823/">IBM HDD (1999)</a> by viertelnachvier<br>
+        <a href="https://pixabay.com/sound-effects/computer-hard-drive-access-fan-click-62422/">HDD Access</a> by martian<br>
+        <a href="https://pixabay.com/sound-effects/the-sound-of-dial-up-internet-6240/">Dialup sound</a> by wtermini
+      </div>
+    </div>
+  </div>
+  <script type="module" src="renderer.js"></script>
+</body>
+</html>

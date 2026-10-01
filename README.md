@@ -14,7 +14,8 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 - 🎚️ Adjustable volume controls
 - 🎵 Background disk ambience option
 - 🖥️ Classic Mac-style interface
-- 💻 Works in the background while you do actual work
+- 💻 Lives in the menu bar / system tray and works in the background while you do actual work
+- 💾 Remembers your settings, and can start at login
 - 🤓 Perfect for confusing your coworkers
 - 🎮 Hidden surprises for the curious (hint: some dots like to be clicked...)
 - 🪟 Cross-platform: Linux is tested; disk activity detection on macOS and Windows is new and not yet tested on real machines, and on Windows it currently needs English performance counter names (an English-language Windows install)
@@ -52,6 +53,20 @@ If you see a message saying the app "is damaged and can't be opened" this is bec
 2. Install using your package manager or run directly
 3. Transport yourself back to the age of spinning platters!
 
+## Using it 🖱️
+
+Mac Disk Sounds runs from the menu bar (macOS) or the system tray (Windows and Linux); it has no Dock icon. The tray menu has:
+
+- **Enabled**: turn the sounds on or off. Off stops the clicks, fades out the ambience and stops watching the disk.
+- **Sound Set**: which recorded drive the clicks come from.
+- **Open Settings…**: the System 7 window with the activity lights, the sound set and the click and ambience volumes.
+- **Launch at Login** (installed builds only).
+- **Quit**.
+
+Clicking the icon opens or closes the settings window (on Linux most trays only show the menu, so use **Open Settings…**). Closing the window keeps the sounds going; only **Quit** stops the app. Starting the app by hand opens the settings window; starting at login does not. Settings are saved as `settings.json` in the app's user data folder. On Linux, Launch at Login writes `~/.config/autostart/mac-disk-sounds.desktop`.
+
+Power use on macOS: while the disk is busy and the sounds are enabled, the app holds a "prevent app suspension" power assertion so App Nap cannot delay the clicks; it is released as soon as the disk goes quiet or the sounds are turned off. Separately, like any Chromium-based app, macOS is kept out of idle sleep while sound is actually playing, which includes the ambience. Set the ambience to 0 (or turn the sounds off) if you want your Mac to idle-sleep while the app runs; the display can sleep either way.
+
 ## Building from Source 🛠️
 
 ```bash
@@ -71,11 +86,33 @@ npm start
 npm test
 npm run lint
 
+# Check the disk monitor works on this machine (about 5 seconds)
+node scripts/smoke-monitor.mjs
+
+# Redraw the tray icons in assets/tray/ (only after changing the script)
+node scripts/make-tray-icons.mjs
+
 # Build for your platform
 npm run build        # Builds for all platforms (macOS, Windows, Linux)
 npm run build:mac    # Builds for macOS only
 npm run build:win    # Builds for Windows only
 npm run build:linux  # Builds for Linux only
+```
+
+### Project layout
+
+```
+src/main/        main process: app lifecycle and windows (index.js), tray,
+                 settings, launch at login, disk monitor and activity model
+src/preload.cjs  the bridge between the pages and main
+src/renderer/    the settings window (index.html, renderer.js, styles.css),
+                 the hidden audio window (audio.html, audio-host.js, audio.js)
+                 and the vendored system.css
+assets/sounds/   the sound files and their credits
+assets/tray/     tray icons, drawn by scripts/make-tray-icons.mjs
+build/           app icons used by electron-builder
+scripts/         icon generator and the disk monitor smoke test
+test/            node --test unit tests
 ```
 
 ## Publishing Releases 📦
@@ -120,7 +157,7 @@ This project started as an experiment in two ways:
 - IBM hard drive sounds from viertelnachvier on Pixabay
 - Additional HDD sounds from martian on Pixabay
 - [Dialup sound from wtermini on Pixabay](https://pixabay.com/sound-effects/the-sound-of-dial-up-internet-6240/)
-- System 7 interface toolkit from [sakun/system.css](https://github.com/sakofchit/system.css) (MIT; v0.1.11 is bundled in `vendor/system.css/`)
+- System 7 interface toolkit from [sakun/system.css](https://github.com/sakofchit/system.css) (MIT; v0.1.11 is bundled in `src/renderer/vendor/system.css/`)
 - Built with Electron and too much free time
 - Inspired by the golden age of spinning rust
 
@@ -128,7 +165,7 @@ This project started as an experiment in two ways:
 
 MIT License - Feel free to make your computer sound as vintage as you want!
 
-The sound files in `sounds/` are **not** covered by the MIT licence. They are from Pixabay and used under the Pixabay Content License; see [sounds/CREDITS.md](sounds/CREDITS.md) for authors, sources and the ranges the app uses.
+The sound files in `assets/sounds/` are **not** covered by the MIT licence. They are from Pixabay and used under the Pixabay Content License; see [assets/sounds/CREDITS.md](assets/sounds/CREDITS.md) for authors, sources and the ranges the app uses.
 
 ---
 

@@ -4,9 +4,9 @@
 const CLICK_SECONDS = 0.3;
 const RAMP_SECONDS = 0.01;
 
-const IBM_FILE = 'sounds/hard-disk-drive-ibm-1999-48823.mp3';
-const GENERIC_FILE = 'sounds/computer-hard-drive-access-fan-click-62422.mp3';
-const MODEM_FILE = 'sounds/the-sound-of-dial-up-internet-6240.mp3';
+const IBM_FILE = '../../assets/sounds/hard-disk-drive-ibm-1999-48823.mp3';
+const GENERIC_FILE = '../../assets/sounds/computer-hard-drive-access-fan-click-62422.mp3';
+const MODEM_FILE = '../../assets/sounds/the-sound-of-dial-up-internet-6240.mp3';
 
 // Click sets: random 300 ms slices taken from [from, to) seconds of a file.
 export const CLICK_SETS = Object.freeze({
@@ -39,12 +39,14 @@ export class AudioEngine {
     this.backgroundSource = null;
 
     this.modemSource = null;
+    this.enabled = true;
+    this.enabledToken = 0;
   }
 
   /**
    * Chromium can start an AudioContext suspended until a user gesture.
-   * Electron normally allows autoplay (see autoplayPolicy in main.js), but
-   * if it does not, resume on the first click or key press.
+   * The audio window allows autoplay (autoplayPolicy in src/main/index.js),
+   * but if that ever fails, resume on the first click or key press.
    */
   resumeWhenAllowed() {
     if (this.context.state !== 'suspended') return;
@@ -78,7 +80,32 @@ export class AudioEngine {
   /** Background volume, 0..1. */
   setBackgroundVolume(volume) {
     this.backgroundVolume = volume;
-    if (this.backgroundSource) rampTo(this.backgroundGain.gain, volume, 0.05, this.context);
+    if (this.backgroundSource && this.enabled) rampTo(this.backgroundGain.gain, volume, 0.05, this.context);
+  }
+
+  /**
+   * Turn the engine on or off. Off fades the ambience out, stops the modem
+   * clip and then suspends the AudioContext, so a disabled app does no audio
+   * work at all; on resumes it and fades the ambience back in.
+   */
+  setEnabled(enabled) {
+    this.enabled = enabled;
+    const token = ++this.enabledToken;
+    if (enabled) {
+      this.context.resume().catch(() => {});
+      if (this.backgroundSource) {
+        rampTo(this.backgroundGain.gain, this.backgroundVolume, BACKGROUND.fadeSeconds, this.context);
+      } else {
+        this.startBackground();
+      }
+      return;
+    }
+    this.stopModem();
+    if (this.backgroundSource) rampTo(this.backgroundGain.gain, 0, BACKGROUND.fadeSeconds, this.context);
+    // Suspend once the fade has finished, unless re-enabled in the meantime.
+    setTimeout(() => {
+      if (token === this.enabledToken && !this.enabled) this.context.suspend().catch(() => {});
+    }, (BACKGROUND.fadeSeconds + 0.2) * 1000);
   }
 
   /** Start the looping background ambience with a fade in. */
@@ -150,6 +177,14 @@ export class AudioEngine {
 
   get modemPlaying() {
     return this.modemSource !== null;
+  }
+
+  stopModem() {
+    try {
+      this.modemSource?.stop();
+    } catch {
+      // Not started or already stopped.
+    }
   }
 
   /**

@@ -2,7 +2,7 @@
   "name": "mac-disk-sounds",
   "version": "1.0.1-alpha.3",
   "description": "Retro HDD sound effects for disk activity",
-  "main": "main.js",
+  "main": "src/main/index.js",
   "type": "module",
   "scripts": {
     "start": "electron .",
@@ -25,24 +25,17 @@
     },
     "files": [
       "package.json",
-      "main.js",
-      "activity.js",
-      "disk-monitor.js",
-      "disk-parsers.js",
-      "preload.cjs",
-      "renderer.js",
-      "audio.js",
-      "index.html",
-      "vendor/system.css/**",
-      "sounds/*.mp3",
-      "icon.iconset/icon_256x256.png"
+      "src/**",
+      "assets/sounds/*.mp3",
+      "assets/tray/*.png",
+      "build/icon.png"
     ],
     "asar": true,
-    "asarUnpack": [
-      "sounds/*.mp3"
-    ],
     "mac": {
       "category": "public.app-category.utilities",
+      "extendInfo": {
+        "LSUIElement": true
+      },
       "icon": "build/icon.icns",
       "target": [
         "dmg",
@@ -67,7 +60,7 @@
       ]
     },
     "linux": {
-      "icon": "icon.iconset/icon_256x256.png",
+      "icon": "build/icon.png",
       "target": [
         "AppImage",
         "deb",

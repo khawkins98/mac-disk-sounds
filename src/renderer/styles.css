@@ -1,0 +1,298 @@
+/* Settings window styles, on top of the vendored system.css. */
+
+body {
+  margin: 0;
+  padding: 0;
+  background: white;
+  user-select: none;
+}
+
+.window {
+  margin: 0;
+  border: 1px solid black;
+}
+
+.window.inactive {
+  border-color: var(--button-shadow);
+}
+
+.window.inactive .title-bar {
+  background: var(--button-face);
+}
+
+.window.inactive .title {
+  color: var(--button-shadow);
+}
+
+.window.inactive .status.active {
+  background: #666;
+}
+
+.window.inactive .volume-slider-container {
+  background: #ddd;
+  border-color: #666;
+}
+
+.window.inactive .volume-numbers {
+  color: #666;
+}
+
+.window.inactive .volume-slider::-webkit-slider-thumb {
+  border-color: #666;
+  background: #eee;
+}
+
+.window.inactive input[type=range]::-webkit-slider-runnable-track {
+  background: #888;
+}
+
+:root {
+  --button-shadow: #888;
+  --button-face: #ddd;
+}
+
+.title-bar .title {
+  display: block;
+  flex: inherit;
+  width: 172px;
+}
+
+.title-bar {
+  -webkit-app-region: drag;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  height: 21px;
+}
+
+.title-bar button {
+  -webkit-app-region: no-drag;
+}
+
+.title {
+  flex: 1;
+  text-align: center;
+  font-weight: normal;
+  font-size: 13px;
+  margin: 0;
+  padding: 0;
+}
+
+.window {
+  display: grid;
+  height: calc(100vh - 2px);
+  grid-template-rows: 27px 1fr;
+}
+
+.window-pane {
+  padding: 12px;
+  -webkit-app-region: no-drag;
+  height: unset;
+  /* system.css always shows a scrollbar; only scroll if it does not fit. */
+  overflow-y: auto;
+}
+
+.volume-control, .sound-select {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.volume-slider {
+  width: 100%;
+  height: 16px;
+  -webkit-appearance: none;
+  background: white;
+  border: 1px solid black;
+  border-radius: 0;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border: 1px solid black;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.status {
+  width: 12px;
+  height: 12px;
+  border: 1px solid black;
+  margin: 0 2px;
+  -webkit-app-region: no-drag;
+  display: inline-block;
+}
+
+.status.active {
+  background: black;
+}
+
+.status-container {
+  text-align: center;
+  margin: 8px auto 0;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.field-row label {
+  width: 85px;
+}
+
+.field-row select {
+  flex: 1;
+}
+
+.field-row input {
+  flex: 1;
+}
+
+.credits {
+  font-size: 11px;
+  text-align: center;
+  margin-top: 12px;
+  padding: 8px;
+  border-top: 1px solid black;
+}
+
+.description {
+  font-size: 11px;
+  text-align: center;
+  margin: 12px 0;
+  padding: 8px;
+  border-top: 1px solid black;
+}
+
+.separator {
+  height: 1px;
+  background: black;
+  margin: 8px 0;
+}
+
+.speed-indicator {
+  font-family: "Chicago", monospace;
+  font-size: 11px;
+  margin: 0 auto;
+  color: #333;
+  min-width: 80px;
+  height: 30px;
+  text-align: center;
+}
+
+.volume-control-group {
+  display: flex;
+  align-items: center;
+  margin-top: 10px;
+  gap: 8px;
+  width: 100%;
+}
+
+.volume-slider-container {
+  position: relative;
+  width: 100%;
+  height: 20px;
+  background: #eee;
+  border: 1px solid #000;
+  box-shadow: inset 1px 1px 0px rgba(0, 0, 0, 0.8);
+  padding: 1px 4px;
+  margin: 0 7px;
+  border-radius: 10px
+}
+
+.volume-numbers {
+  position: absolute;
+  display: flex;
+  justify-content: space-between;
+  width: 96%;
+  padding: 0;
+  font-family: "Chicago", monospace;
+  font-size: 11px;
+  pointer-events: none;
+  color: #000;
+  margin-top: -18px;
+  margin-right: 4px;
+}
+
+.volume-slider {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 5px;
+  background: transparent;
+  margin: 0;
+  padding: 0;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 30px;
+  background: #fff;
+  border: 1px solid black;
+  border-radius: 5px;
+  position: relative;
+  top: -9px;
+  cursor: pointer;
+  box-shadow: inset -1px -1px 0px rgba(0, 0, 0, 0.8);
+}
+
+.volume-slider::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 18px;
+  background: white;
+  border: none;
+  border-radius: 0;
+}
+
+input[type=range]::-webkit-slider-runnable-track {
+  width: 300px;
+  height: 14px;
+  background: #999;
+  position: relative;
+  top: -2px;
+  border: none;
+  border-radius: 4px;
+}
+
+input[type=range]:focus::-webkit-slider-runnable-track {
+  background: #ccc;
+}
+
+label {
+  min-width: 80px;
+}
+
+#sound-set {
+  min-width: 150px;
+}
+
+.enabled-row label {
+  width: auto;
+}
+
+/* Easter egg: the dots go green while the modem dials in (also when the
+   window is inactive, which otherwise greys lit dots). */
+.status.dialup,
+.window.inactive .status.dialup {
+  background: #32cd32;
+}
+
+/* The sounds could not be loaded. */
+.status.error {
+  background: red;
+}
+
+/* Sounds turned off: the activity display is dimmed and stays empty. */
+.window.disabled .status-container,
+.window.disabled .speed-indicator {
+  opacity: 0.4;
+}
