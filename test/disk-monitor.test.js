@@ -171,6 +171,9 @@ test('win32: one long-lived PowerShell reading raw CIM counters, rates from the 
   assert.match(CIM_DISK_SCRIPT, /\[Console\]::Out\.Flush\(\)/);
   assert.match(CIM_DISK_SCRIPT, /InvariantCulture/);
   assert.doesNotMatch(CIM_DISK_SCRIPT, /["\\\n]/);
+  // One CIM session for the whole loop, used by every query.
+  assert.match(CIM_DISK_SCRIPT, /New-CimSession -SessionOption \(New-CimSessionOption -Protocol Dcom\)/);
+  assert.match(CIM_DISK_SCRIPT, /while \(\$true\) \{ \$d = Get-CimInstance @q /);
 
   const out = children[0].stdout;
   out.write('MDS,1000000000,10000000,5000,7000\r\n'); // baseline only
@@ -183,29 +186,72 @@ test('win32: one long-lived PowerShell reading raw CIM counters, rates from the 
   assert.equal(children[0].killed, true);
 });
 
-test('win32: falls back to typeperf if PowerShell/CIM gives no sample in time', async () => {
+const isPowerShell = (child) => /powershell\.exe$/.test(child.command);
+const isTypeperf = (child) => /typeperf\.exe$/.test(child.command);
+const TYPEPERF_LINE = (read) => `"10/01/2026 09:15:02.125","${read}.0","0.0"\r\n`;
+
+test('win32: a slow PowerShell start gets typeperf meanwhile, and CIM takes over once it delivers', async () => {
   const { spawn, children } = fakeSpawn();
   const logger = quietLogger();
-  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger, windowsFallbackMs: 30, backoffMs: { initial: 5 } });
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger, windowsFallbackMs: 30 });
   const samples = [];
   monitor.on('sample', (s) => samples.push(s.readBps));
   monitor.start();
-  // PowerShell prints only a baseline (or nothing, or keeps failing).
-  children[0].stdout.write('MDS,1000000000,10000000,5000,7000\r\n');
+  const powershell = children[0];
+  // PowerShell is slow: only a baseline by the fallback time.
+  powershell.stdout.write('MDS,1000000000,10000000,5000,7000\r\n');
   await delay(60);
 
-  assert.equal(children[0].killed, true);
-  const typeperf = children.at(-1);
-  assert.match(typeperf.command, /typeperf\.exe$/);
-  assert.equal(children.filter((c) => /powershell/.test(c.command) && !c.killed).length, 0, 'no PowerShell left running');
-  // A late line from the killed PowerShell does not count.
-  children[0].stdout.write('MDS,1010000000,10000000,999999,7000\r\n');
-  typeperf.stdout.write('"10/01/2026 09:15:02.125","2048.0","1024.0"\r\n');
+  const typeperf = children.find(isTypeperf);
+  assert.ok(typeperf, 'typeperf started');
+  assert.equal(powershell.killed, false, 'PowerShell keeps running');
+  typeperf.stdout.write(TYPEPERF_LINE(2048));
   await delay(5);
   assert.deepEqual(samples, [2048]);
-  assert.equal(logger.calls.filter(([level, text]) => level === 'warn' && /using typeperf instead/.test(text)).length, 1);
-  monitor.stop();
+  assert.equal(logger.calls.filter(([level, text]) => level === 'warn' && /using typeperf/.test(text)).length, 1);
+
+  // PowerShell finally delivers: its sample counts and typeperf is stopped.
+  powershell.stdout.write('MDS,1010000000,10000000,1053576,7000\r\n');
+  await delay(5);
   assert.equal(typeperf.killed, true);
+  // A late line from the stopped typeperf does not count.
+  typeperf.stdout.write(TYPEPERF_LINE(4096));
+  powershell.stdout.write('MDS,1020000000,10000000,1053576,7000\r\n');
+  await delay(5);
+  assert.deepEqual(samples, [2048, MIB, 0]);
+  assert.equal(children.filter(isTypeperf).length, 1);
+  monitor.stop();
+  assert.equal(powershell.killed, true);
+});
+
+test('win32: a PowerShell that fails starts typeperf at once, and is retried until it works', async () => {
+  const { spawn, children } = fakeSpawn();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger(), windowsFallbackMs: 60000, backoffMs: { initial: 20 } });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s.readBps));
+  monitor.start();
+  children[0].emit('error', new Error('spawn powershell.exe ENOENT'));
+  await delay(5);
+  const typeperf = children.find(isTypeperf);
+  assert.ok(typeperf, 'typeperf started without waiting for the fallback time');
+  typeperf.stdout.write(TYPEPERF_LINE(100));
+  await delay(5);
+  assert.deepEqual(samples, [100]);
+
+  // The retried PowerShell works this time.
+  while (children.filter(isPowerShell).length < 2) await delay(2);
+  const retried = children.filter(isPowerShell)[1];
+  retried.stdout.write('MDS,0,10000000,0,0\r\nMDS,10000000,10000000,300,0\r\n');
+  await delay(5);
+  assert.equal(typeperf.killed, true);
+  assert.deepEqual(samples, [100, 300]);
+
+  // If it dies again later, typeperf covers again (one typeperf at a time).
+  retried.emit('exit', 1, null);
+  await delay(5);
+  assert.equal(children.filter((c) => isTypeperf(c) && !c.killed).length, 1);
+  monitor.stop();
+  assert.ok(children.every((c) => c.killed || c === children[0] || c === retried));
 });
 
 test('win32: no fallback once PowerShell/CIM has delivered a sample', async () => {

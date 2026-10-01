@@ -32,10 +32,14 @@ const TYPEPERF_COUNTERS = [
 // sampled. The line is written with the invariant culture and flushed
 // straight away, since PowerShell otherwise buffers output to a pipe.
 //
+// One CIM session (over DCOM, which needs no WinRM service) is opened before
+// the loop and reused, rather than a new connection every second; if it
+// cannot be opened, each query connects on its own as before.
+//
 // The script is one line with no double quotes or backslashes, so passing
 // it as one -Command argument needs no escaping on the Windows command line.
 const CIM_LOOP_BODY = [
-  "$d = Get-CimInstance -ClassName Win32_PerfRawData_PerfDisk_PhysicalDisk -Filter 'Name=''_Total''' | Select-Object -First 1",
+  "$d = Get-CimInstance @q -ClassName Win32_PerfRawData_PerfDisk_PhysicalDisk -Filter 'Name=''_Total''' | Select-Object -First 1",
   "if ($d) { [Console]::Out.WriteLine([string]::Format($inv, 'MDS,{0},{1},{2},{3}', $d.Timestamp_PerfTime, $d.Frequency_PerfTime, $d.DiskReadBytesPersec, $d.DiskWriteBytesPersec)); [Console]::Out.Flush() }",
   'Start-Sleep -Seconds 1'
 ].join('; ');
@@ -43,15 +47,20 @@ export const CIM_DISK_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   "$ProgressPreference = 'SilentlyContinue'",
   '$inv = [Globalization.CultureInfo]::InvariantCulture',
+  '$q = @{}',
+  'try { $q.CimSession = New-CimSession -SessionOption (New-CimSessionOption -Protocol Dcom) } catch { }',
   `while ($true) { ${CIM_LOOP_BODY} }`
 ].join('; ');
 
 export const POWERSHELL_ARGS = ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', CIM_DISK_SCRIPT];
 
-// If PowerShell/CIM has produced no sample this long after starting, use
-// typeperf instead. PowerShell itself can take several seconds to start on
-// a cold, busy machine, and the first sample needs two readings.
+// If PowerShell/CIM has produced no sample this long after starting,
+// typeperf covers for it until it does. PowerShell itself can take several
+// seconds to start on a cold, busy machine, and the first sample needs two
+// readings.
 const WINDOWS_FALLBACK_MS = 20000;
+// Longest wait between PowerShell restarts while typeperf covers for it.
+const CIM_MAX_BACKOFF_MS = 5 * 60 * 1000;
 
 // iostat -d shows only 4 disks unless told otherwise (sorted by name), which
 // can hide a busy external drive.
@@ -79,11 +88,12 @@ export function cleanRate(value) {
  *   are left out of the total (their I/O also shows on the disk holding the
  *   image file); see findDiskImages.
  * - win32: one long-lived PowerShell reading the raw disk counters through
- *   CIM (CIM_DISK_SCRIPT), which works on any display language. If it has
- *   produced no sample after `windowsFallbackMs`, it is replaced for the
- *   rest of the run by one long-lived `typeperf ... -si 1`, which needs
- *   English counter names. `windowsBackend` ('cim' or 'typeperf') forces
- *   one of them, with no fallback.
+ *   CIM (CIM_DISK_SCRIPT), which works on any display language. While it
+ *   is not delivering (its process failed, or no sample yet after
+ *   `windowsFallbackMs`), one long-lived `typeperf ... -si 1` covers for
+ *   it; typeperf needs English counter names. PowerShell keeps being
+ *   retried, and its first sample stops typeperf. `windowsBackend` ('cim'
+ *   or 'typeperf') forces one of them, with no fallback.
  * Long-lived processes are restarted with backoff if they exit unexpectedly
  * and killed on stop(). Other platforms emit nothing.
  */
@@ -217,13 +227,17 @@ export class DiskMonitor extends EventEmitter {
     return path.win32.join(this.env.SystemRoot ?? 'C:\\Windows', 'System32', ...parts);
   }
 
-  #startCim(owner, onSample) {
+  #startCim(owner, { onSample = null, onFailure = null } = {}) {
     return this.#startProcess({
       command: this.#windowsCommand('WindowsPowerShell', 'v1.0', 'powershell.exe'),
       args: POWERSHELL_ARGS,
       makeLineHandler: (emit) => cimLineHandler(emit),
       owner,
-      onSample
+      onSample,
+      onFailure,
+      // While typeperf covers for it, retrying PowerShell every minute would
+      // cost a second of CPU each time; back off further.
+      maxBackoffMs: owner ? CIM_MAX_BACKOFF_MS : undefined
     });
   }
 
@@ -239,35 +253,53 @@ export class DiskMonitor extends EventEmitter {
     });
   }
 
-  // CIM first; typeperf if CIM has produced nothing in windowsFallbackMs.
+  // CIM always runs (restarted with backoff if it exits). typeperf covers
+  // for it while it is not delivering: from when the PowerShell process
+  // fails (exits or cannot start), or after windowsFallbackMs without a
+  // sample (a slow start), until CIM produces a sample, which stops
+  // typeperf again.
   #startWindows() {
     if (this.windowsBackend === 'cim') return this.#startCim();
     if (this.windowsBackend === 'typeperf') return this.#startTypeperf();
-    let inner = null;
+    let cim = null;
+    let typeperf = null;
     let timer = null;
+    let stopped = false;
     const backend = {
       stop() {
+        stopped = true;
         clearTimeout(timer);
-        inner?.stop();
+        cim?.stop();
+        typeperf?.stop();
+        typeperf = null;
       }
     };
-    // Once CIM has delivered a sample it is known to work: no fallback.
-    inner = this.#startCim(backend, () => clearTimeout(timer));
-    timer = setTimeout(() => {
-      if (!this.running || this.backend !== backend) return;
-      inner.stop();
+    const startTypeperf = (reason) => {
+      clearTimeout(timer);
+      if (stopped || typeperf || !this.running || this.backend !== backend) return;
       this.#logOnce('cim-fallback', 'warn',
-        `No disk samples from PowerShell/CIM after ${this.windowsFallbackMs / 1000} s; using typeperf instead ` +
-        '(it needs English performance counter names).');
-      inner = this.#startTypeperf(backend);
-    }, this.windowsFallbackMs);
+        `PowerShell/CIM ${reason}; using typeperf (which needs English performance counter names) until it works.`);
+      typeperf = this.#startTypeperf(backend);
+    };
+    cim = this.#startCim(backend, {
+      onSample: () => {
+        clearTimeout(timer);
+        if (!typeperf) return;
+        typeperf.stop();
+        typeperf = null;
+        this.logger.log('PowerShell/CIM is giving disk samples; typeperf stopped.');
+      },
+      onFailure: () => startTypeperf('failed')
+    });
+    timer = setTimeout(() => startTypeperf(`gave no disk samples in ${this.windowsFallbackMs / 1000} s`), this.windowsFallbackMs);
     return backend;
   }
 
   // `owner` is the backend object samples are checked against (this one,
   // unless it is part of a composite backend); `onSample` is called after
-  // each sample it emits.
-  #startProcess({ command, args, makeLineHandler, owner = null, onSample = null }) {
+  // each sample it emits, `onFailure` whenever the process exits or cannot
+  // be started (before the restart).
+  #startProcess({ command, args, makeLineHandler, owner = null, onSample = null, onFailure = null, maxBackoffMs = this.backoffMs.max }) {
     let child = null;
     let restartTimer = null;
     let delay = this.backoffMs.initial;
@@ -294,7 +326,8 @@ export class DiskMonitor extends EventEmitter {
         this.logger.warn(`${name} ${description}; restarting with backoff.`, stderr.trim());
       }
       restartTimer = setTimeout(launch, delay);
-      delay = Math.min(delay * 2, this.backoffMs.max);
+      delay = Math.min(delay * 2, maxBackoffMs);
+      onFailure?.();
     };
 
     const launch = () => {
