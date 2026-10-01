@@ -59,6 +59,6 @@ contextBridge.exposeInMainWorld('diskSounds', {
   /** Report that the dial-up clip started (true) or ended (false). */
   reportModem: (playing) => ipcRenderer.send('modem:state', Boolean(playing)),
 
-  /** Report {ok, buffers?, error?} after loading the sounds. */
+  /** Report {ok, decodedBytes?, error?} after (re)loading the sounds. */
   reportAudioStatus: (status) => ipcRenderer.send('audio:status', status)
 });

@@ -471,7 +471,8 @@ function registerIpc() {
     audioStatus = { ok };
     if (ok) {
       audioRestartDelay = 1000;
-      console.log(`Audio window ready: ${Number(status.buffers)} sound files decoded.`);
+      const megabytes = (Number(status.decodedBytes) / (1024 * 1024)).toFixed(1);
+      console.log(`Audio window ready: ${megabytes} MB of decoded audio held.`);
     } else {
       console.error('Audio window could not load the sounds:', String(status?.error));
     }
