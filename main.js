@@ -40,23 +40,12 @@ async function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      webSecurity: false,
       // Reduce memory usage
       enableWebSQL: false,
       spellcheck: false,
       backgroundThrottling: true
     },
     icon: path.join(__dirname, 'icon', 'hdd-icon.jpg')
-  });
-
-  // Enable loading of ES modules
-  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': ['script-src \'self\' \'unsafe-inline\' \'unsafe-eval\'']
-      }
-    });
   });
 
   await mainWindow.loadFile('index.html');
