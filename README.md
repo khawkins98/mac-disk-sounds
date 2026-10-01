@@ -14,7 +14,8 @@ Ever miss the satisfying sounds of a hard drive doing its thing? Feel like your 
 - 🎚️ Adjustable volume controls
 - 🎵 Background disk ambience option
 - 🖥️ Classic Mac-style interface
-- 💻 Works in the background while you do actual work
+- 💻 Lives in the menu bar / system tray and works in the background while you do actual work
+- 💾 Remembers your settings, and can start at login
 - 🤓 Perfect for confusing your coworkers
 - 🎮 Hidden surprises for the curious (hint: some dots like to be clicked...)
 - 🪟 Cross-platform: Linux is tested; disk activity detection on macOS and Windows is new and not yet tested on real machines, and on Windows it currently needs English performance counter names (an English-language Windows install)
@@ -52,6 +53,20 @@ If you see a message saying the app "is damaged and can't be opened" this is bec
 2. Install using your package manager or run directly
 3. Transport yourself back to the age of spinning platters!
 
+## Using it 🖱️
+
+Mac Disk Sounds runs from the menu bar (macOS) or the system tray (Windows and Linux); it has no Dock icon. The tray menu has:
+
+- **Enabled**: turn the sounds on or off. Off stops the clicks, fades out the ambience and stops watching the disk.
+- **Sound Set**: which recorded drive the clicks come from.
+- **Open Settings…**: the System 7 window with the activity lights, the sound set and the click and ambience volumes.
+- **Launch at Login** (installed builds only).
+- **Quit**.
+
+Clicking the icon opens or closes the settings window (on Linux most trays only show the menu, so use **Open Settings…**). Closing the window keeps the sounds going; only **Quit** stops the app. Starting the app by hand opens the settings window; starting at login does not. Settings are saved as `settings.json` in the app's user data folder. On Linux, Launch at Login writes `~/.config/autostart/mac-disk-sounds.desktop`.
+
+On macOS, while the sounds are enabled the app asks the system not to put it to sleep (App Nap), so the clicks keep time with no window open. That also keeps the Mac from idle sleep (the display can still sleep); turn the sounds off from the menu bar if that matters to you.
+
 ## Building from Source 🛠️
 
 ```bash
@@ -71,11 +86,33 @@ npm start
 npm test
 npm run lint
 
+# Check the disk monitor works on this machine (about 5 seconds)
+node scripts/smoke-monitor.mjs
+
+# Redraw the tray icons in assets/tray/ (only after changing the script)
+node scripts/make-tray-icons.mjs
+
 # Build for your platform
 npm run build        # Builds for all platforms (macOS, Windows, Linux)
 npm run build:mac    # Builds for macOS only
 npm run build:win    # Builds for Windows only
 npm run build:linux  # Builds for Linux only
+```
+
+### Project layout
+
+```
+src/main/        main process: app lifecycle and windows (index.js), tray,
+                 settings, launch at login, disk monitor and activity model
+src/preload.cjs  the bridge between the pages and main
+src/renderer/    the settings window (index.html, renderer.js, styles.css),
+                 the hidden audio window (audio.html, audio-host.js, audio.js)
+                 and the vendored system.css
+assets/sounds/   the sound files and their credits
+assets/tray/     tray icons, drawn by scripts/make-tray-icons.mjs
+build/           app icons used by electron-builder
+scripts/         icon generator and the disk monitor smoke test
+test/            node --test unit tests
 ```
 
 ## Publishing Releases 📦
