@@ -27,6 +27,7 @@
       "package.json",
       "src/**",
       "assets/sounds/*.mp3",
+      "assets/tray/*.png",
       "build/icon.png"
     ],
     "asar": true,
@@ -35,6 +36,9 @@
     ],
     "mac": {
       "category": "public.app-category.utilities",
+      "extendInfo": {
+        "LSUIElement": true
+      },
       "icon": "build/icon.icns",
       "target": [
         "dmg",

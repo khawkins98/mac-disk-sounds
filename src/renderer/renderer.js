@@ -1,28 +1,27 @@
-// Renderer: plain browser JavaScript. It talks to the main process only
-// through window.diskSounds (preload.cjs) and only renders and plays.
-import { AudioEngine } from './audio.js';
+// The settings window: plain browser JavaScript. It talks to the main
+// process only through window.diskSounds (preload.cjs). It plays nothing
+// itself; the hidden audio window does, so sounds carry on when this window
+// is closed.
+import { nextInterval } from './clicks.js';
 
 const bridge = window.diskSounds;
 
-// Clicks per second for each activity level (index 0 = idle).
-const CLICKS_PER_SECOND = [0, 1.5, 2.5, 4, 6, 9];
-// How far ahead clicks are scheduled on the audio clock, and how often the
-// schedule is topped up.
-const LOOKAHEAD_SECONDS = 0.25;
-const SCHEDULER_INTERVAL_MS = 100;
+// How long a dot stays lit for one click, in ms (a click is 300 ms long).
+const BLINK_MS = 150;
 
 // UI elements
 const mainWindow = document.getElementById('main-window');
-const volumeSlider = document.getElementById('volume');
-const volumeValue = document.getElementById('volume-value');
-const backgroundVolumeSlider = document.getElementById('background-volume');
-const backgroundVolumeValue = document.getElementById('background-volume-value');
+const enabledCheckbox = document.getElementById('enabled');
+const clickVolumeSlider = document.getElementById('click-volume');
+const ambienceVolumeSlider = document.getElementById('ambience-volume');
 const soundSetSelect = document.getElementById('sound-set');
 const activityIndicators = Array.from({ length: 5 }, (_, i) => document.getElementById(`activity-indicator-${i + 1}`));
 const diskSpeed = document.getElementById('disk-speed');
 
-// Sliders are 0-7.
-const sliderVolume = (slider) => parseInt(slider.value, 10) / 7;
+// Sliders are 0-7; settings store volumes as 0..1.
+const SLIDER_STEPS = 7;
+const toSlider = (volume) => String(Math.round(volume * SLIDER_STEPS));
+const fromSlider = (slider) => parseInt(slider.value, 10) / SLIDER_STEPS;
 
 // Window focus styling
 const setFocused = (focused) => mainWindow.classList.toggle('inactive', !focused);
@@ -46,34 +45,35 @@ document.addEventListener('click', (event) => {
   bridge.openExternal(link.href);
 });
 
-const audio = new AudioEngine();
-let audioReady = false;
+// Settings. Main validates and stores them and pushes every change back
+// (including ones made from the tray menu), so the controls only ever show
+// what main has.
+let settings = null;
 
-// Controls
-let clickVolume = sliderVolume(volumeSlider);
-let currentSoundSet = soundSetSelect.value;
-audio.setBackgroundVolume(sliderVolume(backgroundVolumeSlider));
+function showSettings(next) {
+  settings = next;
+  enabledCheckbox.checked = next.enabled;
+  soundSetSelect.value = next.soundSet;
+  // Leave a slider alone while it is being dragged.
+  if (document.activeElement !== clickVolumeSlider) clickVolumeSlider.value = toSlider(next.clickVolume);
+  if (document.activeElement !== ambienceVolumeSlider) ambienceVolumeSlider.value = toSlider(next.ambienceVolume);
+  mainWindow.classList.toggle('disabled', !next.enabled);
+  updateActivityDisplay();
+}
 
-volumeSlider.addEventListener('input', () => {
-  volumeValue.textContent = volumeSlider.value;
-  clickVolume = sliderVolume(volumeSlider);
-});
+enabledCheckbox.addEventListener('change', () => bridge.setSettings({ enabled: enabledCheckbox.checked }));
+soundSetSelect.addEventListener('change', () => bridge.setSettings({ soundSet: soundSetSelect.value }));
+clickVolumeSlider.addEventListener('input', () => bridge.setSettings({ clickVolume: fromSlider(clickVolumeSlider) }));
+ambienceVolumeSlider.addEventListener('input', () => bridge.setSettings({ ambienceVolume: fromSlider(ambienceVolumeSlider) }));
 
-backgroundVolumeSlider.addEventListener('input', () => {
-  backgroundVolumeValue.textContent = backgroundVolumeSlider.value;
-  audio.setBackgroundVolume(sliderVolume(backgroundVolumeSlider));
-});
-
-soundSetSelect.addEventListener('change', () => {
-  currentSoundSet = soundSetSelect.value;
-  // Drop clicks already scheduled from the old set and carry on with the new.
-  cancelScheduledClicks();
-  scheduleClicks();
-});
-
-// Activity indicators. One function owns the dots; it stands aside while the
-// easter egg animation runs, so the two never fight over them.
+// Activity display. The dots blink at the same pace as the clicks (the
+// audio window schedules the real ones); one function owns the dots and
+// stands aside while the easter egg animation runs.
+let activity = { active: false, level: 0 };
 let dialupAnimation = null;
+let blinkTimer = null;
+let blinkOffTimer = null;
+
 const setLitDots = (count) => {
   if (dialupAnimation) return;
   activityIndicators.forEach((indicator, i) => indicator.classList.toggle('active', i < count));
@@ -92,71 +92,42 @@ const describeSpeed = ({ readBps, writeBps, totalBps }) => {
   return `${readBps >= writeBps ? 'read' : 'write'} ${formatBytes(totalBps)}`;
 };
 
-// Click scheduling. Main says when the disk is active and how busy (level
-// 1-5); while active, clicks are scheduled a little ahead on the audio clock
-// at a density set by the level, with some jitter so it sounds like seeking.
-let activity = { active: false, level: 0 };
-let schedulerTimer = null;
-let nextClickAt = 0;
-let scheduledClicks = [];
-let renderFrame = null;
+const isBusy = () => Boolean(settings?.enabled && activity.active);
 
-const nextInterval = (level) => (1 / CLICKS_PER_SECOND[level]) * (0.4 + Math.random() * 1.2);
-
-const scheduleClicks = () => {
-  if (!activity.active || !audioReady) return;
-  const now = audio.currentTime;
-  // Also pruned here: animation frames do not run while the window is hidden.
-  scheduledClicks = scheduledClicks.filter((click) => click.end > now);
-  if (nextClickAt < now) nextClickAt = now;
-  while (nextClickAt < now + LOOKAHEAD_SECONDS) {
-    const click = audio.click(currentSoundSet, nextClickAt, clickVolume);
-    scheduledClicks.push(click);
-    nextClickAt = click.start + nextInterval(activity.level);
-  }
-  startRendering();
-};
-
-// Light the dots while a click is actually sounding.
-const renderDots = () => {
-  renderFrame = null;
-  const now = audio.currentTime;
-  scheduledClicks = scheduledClicks.filter((click) => click.end > now);
-  const sounding = scheduledClicks.some((click) => click.start <= now);
-  setLitDots(sounding ? Math.max(1, activity.level) : 0);
-  if (activity.active || scheduledClicks.length > 0) startRendering();
-};
-
-function cancelScheduledClicks() {
-  scheduledClicks.forEach((click) => click.stop());
-  scheduledClicks = [];
-  nextClickAt = 0;
+function blink() {
+  blinkTimer = null;
+  if (!isBusy()) return;
+  setLitDots(Math.max(1, activity.level));
+  clearTimeout(blinkOffTimer);
+  blinkOffTimer = setTimeout(() => setLitDots(0), BLINK_MS);
+  blinkTimer = setTimeout(blink, nextInterval(activity.level) * 1000);
 }
 
-function startRendering() {
-  if (renderFrame === null) renderFrame = requestAnimationFrame(renderDots);
+function updateActivityDisplay() {
+  if (isBusy()) {
+    diskSpeed.textContent = describeSpeed(activity);
+    if (blinkTimer === null) blink();
+  } else {
+    diskSpeed.textContent = settings && !settings.enabled ? 'Disabled' : '';
+    clearTimeout(blinkTimer);
+    blinkTimer = null;
+    setLitDots(0);
+  }
 }
 
 // Called on every state or level change and, while active, about once a
 // second with fresh rates for the readout.
-const onActivity = (state) => {
+bridge.onActivity((state) => {
   activity = state;
-  if (state.active) {
-    diskSpeed.textContent = describeSpeed(state);
-    if (schedulerTimer === null) {
-      schedulerTimer = setInterval(scheduleClicks, SCHEDULER_INTERVAL_MS);
-    }
-    scheduleClicks();
-  } else {
-    diskSpeed.textContent = '';
-    clearInterval(schedulerTimer);
-    schedulerTimer = null;
-  }
-};
+  updateActivityDisplay();
+});
 
-bridge.onActivity(onActivity);
+bridge.onAudioStatus(({ ok }) => {
+  activityIndicators.forEach((indicator) => indicator.classList.toggle('error', !ok));
+});
 
-// Easter egg: three quick clicks on the dots dial into the 90s.
+// Easter egg: three quick clicks on the dots dial into the 90s. The audio
+// window plays the clip and says when it starts and ends.
 const dialupPatterns = [
   [1, 0, 0, 0, 0], // Initial connection
   [1, 1, 0, 0, 0], // Handshake start
@@ -170,20 +141,20 @@ const dialupPatterns = [
 const showDialupPattern = (pattern) => {
   activityIndicators.forEach((indicator, i) => {
     indicator.classList.toggle('active', Boolean(pattern[i]));
-    indicator.style.backgroundColor = pattern[i] ? '#32CD32' : '';
+    indicator.classList.toggle('dialup', Boolean(pattern[i]));
   });
 };
 
 const stopDialupAnimation = () => {
+  if (!dialupAnimation) return;
   clearInterval(dialupAnimation);
   dialupAnimation = null;
-  activityIndicators.forEach((indicator) => {
-    indicator.style.backgroundColor = '';
-  });
+  activityIndicators.forEach((indicator) => indicator.classList.remove('dialup'));
   setLitDots(0);
 };
 
 const startDialupAnimation = () => {
+  if (dialupAnimation) return;
   let patternIndex = 0;
   showDialupPattern(dialupPatterns[patternIndex]);
   // Change pattern every 800 ms, roughly the pace of a real handshake.
@@ -192,6 +163,14 @@ const startDialupAnimation = () => {
     showDialupPattern(dialupPatterns[patternIndex]);
   }, 800);
 };
+
+bridge.onModem(({ playing }) => {
+  if (playing) {
+    startDialupAnimation();
+  } else {
+    stopDialupAnimation();
+  }
+});
 
 let clickCount = 0;
 let clickTimer = null;
@@ -207,24 +186,9 @@ activityIndicators.forEach((indicator) => {
     if (clickCount < 3) return;
     clickCount = 0;
     clearTimeout(clickTimer);
-    if (!audioReady || audio.modemPlaying) return;
-    // Same 0-7 scale as the Activity slider.
-    if (audio.playModem(clickVolume, stopDialupAnimation)) {
-      startDialupAnimation();
-    }
+    bridge.playModem();
   });
 });
 
-// Start up: decode everything once, then the spin-up clip and the ambience.
-audio.resumeWhenAllowed();
-audio.load().then(() => {
-  audioReady = true;
-  audio.playStartup();
-  audio.startBackground();
-  if (activity.active) scheduleClicks();
-}).catch((error) => {
-  console.error('Could not load sounds:', error);
-  activityIndicators.forEach((indicator) => {
-    indicator.style.backgroundColor = 'red';
-  });
-});
+bridge.onSettings(showSettings);
+bridge.getSettings().then(showSettings);

@@ -39,6 +39,8 @@ export class AudioEngine {
     this.backgroundSource = null;
 
     this.modemSource = null;
+    this.enabled = true;
+    this.enabledToken = 0;
   }
 
   /**
@@ -78,7 +80,32 @@ export class AudioEngine {
   /** Background volume, 0..1. */
   setBackgroundVolume(volume) {
     this.backgroundVolume = volume;
-    if (this.backgroundSource) rampTo(this.backgroundGain.gain, volume, 0.05, this.context);
+    if (this.backgroundSource && this.enabled) rampTo(this.backgroundGain.gain, volume, 0.05, this.context);
+  }
+
+  /**
+   * Turn the engine on or off. Off fades the ambience out, stops the modem
+   * clip and then suspends the AudioContext, so a disabled app does no audio
+   * work at all; on resumes it and fades the ambience back in.
+   */
+  setEnabled(enabled) {
+    this.enabled = enabled;
+    const token = ++this.enabledToken;
+    if (enabled) {
+      this.context.resume().catch(() => {});
+      if (this.backgroundSource) {
+        rampTo(this.backgroundGain.gain, this.backgroundVolume, BACKGROUND.fadeSeconds, this.context);
+      } else {
+        this.startBackground();
+      }
+      return;
+    }
+    this.stopModem();
+    if (this.backgroundSource) rampTo(this.backgroundGain.gain, 0, BACKGROUND.fadeSeconds, this.context);
+    // Suspend once the fade has finished, unless re-enabled in the meantime.
+    setTimeout(() => {
+      if (token === this.enabledToken && !this.enabled) this.context.suspend().catch(() => {});
+    }, (BACKGROUND.fadeSeconds + 0.2) * 1000);
   }
 
   /** Start the looping background ambience with a fade in. */
@@ -150,6 +177,14 @@ export class AudioEngine {
 
   get modemPlaying() {
     return this.modemSource !== null;
+  }
+
+  stopModem() {
+    try {
+      this.modemSource?.stop();
+    } catch {
+      // Not started or already stopped.
+    }
   }
 
   /**
