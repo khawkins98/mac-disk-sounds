@@ -80,7 +80,8 @@ const MIB = 1024 * 1024;
  * @param {string} line
  * @param {number[]|null} mbColumns indexes of the MB/s columns from the last
  *   heading line, or null if none has been seen yet
- * @returns {{kind: 'header', mbColumns: number[]} | {kind: 'data', totalBps: number} | {kind: 'other'}}
+ * @returns {{kind: 'devices', names: string[]} | {kind: 'header', mbColumns: number[]} |
+ *   {kind: 'data', totalBps: number} | {kind: 'other'}}
  */
 export function parseIostatLine(line, mbColumns) {
   const tokens = line.trim().split(/\s+/).filter(Boolean);
@@ -92,6 +93,12 @@ export function parseIostatLine(line, mbColumns) {
       if (token === 'MB/s') columns.push(i);
     });
     return { kind: 'header', mbColumns: columns };
+  }
+
+  // The device-name line, e.g. "disk0 disk4". iostat reprints it when the
+  // set of disks shown changes.
+  if (tokens.every((token) => /^[A-Za-z][\w.-]*$/.test(token)) && !tokens.includes('KB/t')) {
+    return { kind: 'devices', names: tokens };
   }
 
   if (!tokens.every((token) => /^-?\d+(?:\.\d+)?$/.test(token))) {

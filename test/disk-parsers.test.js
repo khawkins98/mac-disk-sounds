@@ -58,7 +58,7 @@ test('splitLines carries partial lines across chunks', () => {
 
 test('parseIostatLine reads the MB/s columns of macOS iostat output', () => {
   const lines = fixture('iostat.txt').split('\n');
-  assert.deepEqual(parseIostatLine(lines[0], null), { kind: 'other' });
+  assert.deepEqual(parseIostatLine(lines[0], null), { kind: 'devices', names: ['disk0', 'disk4'] });
   const header = parseIostatLine(lines[1], null);
   assert.deepEqual(header, { kind: 'header', mbColumns: [2, 5] });
 

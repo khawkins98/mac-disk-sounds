@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { readFile as nodeReadFile } from 'node:fs/promises';
+import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 import {
   parseDiskstats,
@@ -15,16 +16,29 @@ const TYPEPERF_COUNTERS = [
   '\\PhysicalDisk(_Total)\\Disk Write Bytes/sec'
 ];
 
+// iostat -d shows only 4 disks unless told otherwise (sorted by name), which
+// can hide a busy external drive.
+const IOSTAT_MAX_DISKS = '64';
+
+// A rate is a finite, non-negative number; anything else counts as 0.
+// null stays null: it means "not reported" (read/write split on macOS).
+export function cleanRate(value) {
+  if (value === null) return null;
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 /**
  * Samples whole-machine disk throughput about once a second.
  *
- * Emits `sample` with `{readBps, writeBps, totalBps, at}`. On macOS iostat
- * only reports a combined rate, so `readBps` and `writeBps` are null there
- * and only `totalBps` is meaningful.
+ * Emits `sample` with `{readBps, writeBps, totalBps, at}`. `at` is a
+ * monotonic time in milliseconds (performance.now() by default), so wall
+ * clock changes cannot disturb rates or the activity model's warm-up. On
+ * macOS iostat only reports a combined rate, so `readBps` and `writeBps` are
+ * null there and only `totalBps` is meaningful.
  *
  * Backends:
  * - linux: reads /proc/diskstats on a timer (no child processes).
- * - darwin: one long-lived `iostat -d -w 1 -K`.
+ * - darwin: one long-lived `iostat -d -n 64 -w 1 -K`.
  * - win32: one long-lived `typeperf ... -si 1`.
  * Long-lived processes are restarted with backoff if they exit unexpectedly
  * and killed on stop(). Other platforms emit nothing.
@@ -36,8 +50,10 @@ export class DiskMonitor extends EventEmitter {
     readFile = nodeReadFile,
     spawn = nodeSpawn,
     logger = console,
-    backoffMs = { initial: 1000, max: 60000 },
-    now = Date.now
+    // The restart delay doubles from `initial` to `max`, and goes back to
+    // `initial` only after a process has stayed up for `stableMs`.
+    backoffMs = { initial: 1000, max: 60000, stableMs: 10000 },
+    now = () => performance.now()
   } = {}) {
     super();
     this.platform = platform;
@@ -45,7 +61,7 @@ export class DiskMonitor extends EventEmitter {
     this.readFile = readFile;
     this.spawn = spawn;
     this.logger = logger;
-    this.backoffMs = backoffMs;
+    this.backoffMs = { initial: 1000, max: 60000, stableMs: 10000, ...backoffMs };
     this.now = now;
     this.running = false;
     this.backend = null;
@@ -62,19 +78,17 @@ export class DiskMonitor extends EventEmitter {
       case 'darwin':
         this.backend = this.#startProcess({
           command: '/usr/sbin/iostat',
-          args: ['-d', '-w', '1', '-K'],
-          makeLineHandler: () => this.#iostatLineHandler()
+          args: ['-d', '-n', IOSTAT_MAX_DISKS, '-w', '1', '-K'],
+          makeLineHandler: (emit) => iostatLineHandler(emit)
         });
         break;
       case 'win32':
         this.backend = this.#startProcess({
           command: path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'typeperf.exe'),
           args: [...TYPEPERF_COUNTERS, '-si', '1'],
-          makeLineHandler: () => (line) => {
+          makeLineHandler: (emit) => (line) => {
             const parsed = parseTypeperfLine(line);
-            if (parsed.kind !== 'data') return false;
-            this.#emitSample(parsed.readBps, parsed.writeBps);
-            return true;
+            if (parsed.kind === 'data') emit(parsed.readBps, parsed.writeBps);
           }
         });
         break;
@@ -92,9 +106,13 @@ export class DiskMonitor extends EventEmitter {
     this.backend = null;
   }
 
-  #emitSample(readBps, writeBps, totalBps = readBps + writeBps) {
-    if (!this.running) return;
-    this.emit('sample', { readBps, writeBps, totalBps, at: this.now() });
+  // Samples from a backend that has been stopped or replaced are dropped.
+  #emitSample(backend, readBps, writeBps, totalBps) {
+    if (!this.running || backend !== this.backend) return;
+    const read = cleanRate(readBps);
+    const write = cleanRate(writeBps);
+    const total = totalBps === undefined ? (read ?? 0) + (write ?? 0) : cleanRate(totalBps) ?? 0;
+    this.emit('sample', { readBps: read, writeBps: write, totalBps: total, at: this.now() });
   }
 
   #logOnce(key, level, ...args) {
@@ -107,6 +125,13 @@ export class DiskMonitor extends EventEmitter {
     let previous = null;
     let reading = false;
     let stopped = false;
+    let timer = null;
+    const backend = {
+      stop() {
+        stopped = true;
+        clearInterval(timer);
+      }
+    };
 
     const tick = async () => {
       if (reading || stopped) return;
@@ -124,7 +149,7 @@ export class DiskMonitor extends EventEmitter {
         const deviceKey = totals.devices.join(' ');
         if (previous && previous.deviceKey === deviceKey) {
           const { readBps, writeBps } = diskstatsRate(previous, totals, at - previous.at);
-          this.#emitSample(readBps, writeBps);
+          this.#emitSample(backend, readBps, writeBps);
         }
         previous = { ...totals, deviceKey, at };
       } catch (error) {
@@ -135,66 +160,68 @@ export class DiskMonitor extends EventEmitter {
     };
 
     tick();
-    const timer = setInterval(tick, this.intervalMs);
-    return {
-      stop() {
-        stopped = true;
-        clearInterval(timer);
-      }
-    };
-  }
-
-  #iostatLineHandler() {
-    let mbColumns = null;
-    // The first report is the average since boot, not the last second.
-    let skippedFirst = false;
-    return (line) => {
-      const parsed = parseIostatLine(line, mbColumns);
-      if (parsed.kind === 'header') {
-        mbColumns = parsed.mbColumns;
-        return false;
-      }
-      if (parsed.kind !== 'data') return false;
-      if (!skippedFirst) {
-        skippedFirst = true;
-        return false;
-      }
-      this.#emitSample(null, null, parsed.totalBps);
-      return true;
-    };
+    timer = setInterval(tick, this.intervalMs);
+    return backend;
   }
 
   #startProcess({ command, args, makeLineHandler }) {
     let child = null;
     let restartTimer = null;
     let delay = this.backoffMs.initial;
+    let failureLogged = false;
     let stopped = false;
     const name = path.basename(command);
+    const backend = {
+      stop() {
+        stopped = true;
+        clearTimeout(restartTimer);
+        restartTimer = null;
+        if (child) {
+          child.kill();
+          child = null;
+        }
+      }
+    };
+
+    const scheduleRestart = (description, stderr = '') => {
+      if (stopped || restartTimer) return;
+      // Log the first failure of a run of failures, not every retry.
+      if (!failureLogged) {
+        failureLogged = true;
+        this.logger.warn(`${name} ${description}; restarting with backoff.`, stderr.trim());
+      }
+      restartTimer = setTimeout(launch, delay);
+      delay = Math.min(delay * 2, this.backoffMs.max);
+    };
 
     const launch = () => {
       restartTimer = null;
       if (stopped) return;
-      const onLine = makeLineHandler();
       let buffered = '';
       let stderr = '';
+      let current;
 
       try {
-        child = this.spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+        current = this.spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       } catch (error) {
-        this.logger.error(`Could not start ${name}:`, error);
-        scheduleRestart();
+        scheduleRestart(`could not be started (${error.message})`);
         return;
       }
-      const current = child;
+      child = current;
+      const launchedAt = this.now();
+
+      // Only the current child of a running backend may emit.
+      const emit = (readBps, writeBps, totalBps) => {
+        if (stopped || child !== current) return;
+        this.#emitSample(backend, readBps, writeBps, totalBps);
+      };
+      const onLine = makeLineHandler(emit);
 
       current.stdout.setEncoding('utf8');
       current.stdout.on('data', (chunk) => {
         const { lines, rest } = splitLines(buffered, chunk);
         buffered = rest;
-        for (const line of lines) {
-          // A process that is producing samples is healthy again.
-          if (onLine(line)) delay = this.backoffMs.initial;
-        }
+        for (const line of lines) onLine(line);
       });
       current.stderr?.setEncoding('utf8');
       current.stderr?.on('data', (chunk) => {
@@ -207,30 +234,55 @@ export class DiskMonitor extends EventEmitter {
         finished = true;
         if (child === current) child = null;
         if (stopped) return;
-        this.logger.warn(`${name} ${description}; restarting in ${delay / 1000} s.`, stderr.trim());
-        scheduleRestart();
+        // A process that stayed up for a while was healthy: start the
+        // backoff again from the beginning. A crash loop keeps backing off.
+        if (this.now() - launchedAt >= this.backoffMs.stableMs) {
+          delay = this.backoffMs.initial;
+          failureLogged = false;
+        }
+        scheduleRestart(description, stderr);
       };
       current.on('error', (error) => finish(`failed (${error.message})`));
       current.on('exit', (code, signal) => finish(`exited (code ${code}, signal ${signal})`));
     };
 
-    const scheduleRestart = () => {
-      if (stopped || restartTimer) return;
-      restartTimer = setTimeout(launch, delay);
-      delay = Math.min(delay * 2, this.backoffMs.max);
-    };
-
     launch();
-    return {
-      stop() {
-        stopped = true;
-        clearTimeout(restartTimer);
-        restartTimer = null;
-        if (child) {
-          child.kill();
-          child = null;
-        }
-      }
-    };
+    return backend;
   }
+}
+
+/**
+ * Line handler for one iostat process. The first report is the average
+ * since boot, and when the set of disks shown changes (a disk is attached,
+ * or slides into the visible set) iostat reprints the device line and the
+ * next report counts a new disk's bytes since boot. Skip the data line after
+ * any change of device line, which also covers the first one.
+ */
+export function iostatLineHandler(emit) {
+  let mbColumns = null;
+  let devices = null;
+  let skipNext = true;
+  return (line) => {
+    const parsed = parseIostatLine(line, mbColumns);
+    switch (parsed.kind) {
+      case 'devices': {
+        const key = parsed.names.join(' ');
+        if (key !== devices) {
+          devices = key;
+          skipNext = true;
+        }
+        break;
+      }
+      case 'header':
+        mbColumns = parsed.mbColumns;
+        break;
+      case 'data':
+        if (skipNext) {
+          skipNext = false;
+        } else {
+          emit(null, null, parsed.totalBps);
+        }
+        break;
+    }
+  };
 }

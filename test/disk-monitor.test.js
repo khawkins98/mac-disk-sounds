@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
-import { DiskMonitor } from '../disk-monitor.js';
+import { performance } from 'node:perf_hooks';
+import { DiskMonitor, cleanRate } from '../disk-monitor.js';
 
 const quietLogger = () => {
   const calls = [];
@@ -93,7 +94,7 @@ test('darwin: one iostat process, skips the since-boot line, sums MB/s', async (
 
   assert.equal(children.length, 1);
   assert.equal(children[0].command, '/usr/sbin/iostat');
-  assert.deepEqual(children[0].args, ['-d', '-w', '1', '-K']);
+  assert.deepEqual(children[0].args, ['-d', '-n', '64', '-w', '1', '-K']);
 
   const out = children[0].stdout;
   out.write('              disk0               disk4 \n    KB/t  tps  MB/s     KB/t  tps  MB/s \n');
@@ -160,7 +161,101 @@ test('restarts a process that exits unexpectedly, with backoff', async () => {
   assert.equal(children[2].killed, true);
   await delay(200);
   assert.equal(children.length, 3, 'no restart after stop()');
-  assert.ok(logger.calls.some(([level, msg]) => level === 'warn' && /restarting/.test(msg)));
+});
+
+test('a crash loop keeps backing off even if it emits samples, and logs once', async () => {
+  const { spawn, children } = fakeSpawn();
+  const logger = quietLogger();
+  let clock = 0;
+  const monitor = new DiskMonitor({
+    platform: 'win32',
+    spawn,
+    logger,
+    now: () => clock,
+    backoffMs: { initial: 20, max: 1000, stableMs: 10000 }
+  });
+  let samples = 0;
+  monitor.on('sample', () => samples++);
+  monitor.start();
+
+  // Each child prints one good sample and dies at once.
+  const crash = (child) => {
+    child.stdout.write('"10/01/2026 09:15:02.125","2048.0","1024.0"\r\n');
+    setImmediate(() => child.emit('exit', 1, null));
+  };
+  const started = [];
+  let last = performance.now();
+  for (let i = 0; i < 4; i++) {
+    crash(children[i]);
+    while (children.length === i + 1) await delay(2);
+    const t = performance.now();
+    started.push(t - last);
+    last = t;
+  }
+  assert.equal(samples, 4);
+  // Delays roughly 20, 40, 80, 160 ms: each at least the doubled minimum.
+  assert.ok(started[1] >= 35 && started[2] >= 75 && started[3] >= 155, `delays ${started.map(Math.round)}`);
+  const warnings = logger.calls.filter(([level]) => level === 'warn');
+  assert.equal(warnings.length, 1, 'repeated failures are logged once');
+
+  // A child that stays up for stableMs resets the backoff and the logging.
+  clock += 10000;
+  children[4].emit('exit', 1, null);
+  const t0 = performance.now();
+  while (children.length === 5) await delay(2);
+  assert.ok(performance.now() - t0 < 150, 'restarted from the initial delay');
+  assert.equal(logger.calls.filter(([level]) => level === 'warn').length, 2);
+  monitor.stop();
+});
+
+test('samples from a replaced child or a stopped monitor are dropped', async () => {
+  const { spawn, children } = fakeSpawn();
+  const monitor = new DiskMonitor({ platform: 'win32', spawn, logger: quietLogger(), backoffMs: { initial: 5 } });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s.readBps));
+  monitor.start();
+  const old = children[0];
+  old.emit('exit', 1, null);
+  while (children.length === 1) await delay(2);
+  // The old child's pipe still delivers a line after it was replaced.
+  old.stdout.write('"t","111","0"\n');
+  children[1].stdout.write('"t","222","0"\n');
+  await delay(5);
+  monitor.stop();
+  children[1].stdout.write('"t","333","0"\n');
+  await delay(5);
+  assert.deepEqual(samples, [222]);
+});
+
+test('cleanRate turns NaN, negative and infinite rates into 0 and keeps null', () => {
+  assert.equal(cleanRate(NaN), 0);
+  assert.equal(cleanRate(-5), 0);
+  assert.equal(cleanRate(Infinity), 0);
+  assert.equal(cleanRate(undefined), 0);
+  assert.equal(cleanRate(1234.5), 1234.5);
+  assert.equal(cleanRate(null), null);
+});
+
+test('darwin: a change in the disk set skips the next report (no fake burst)', async () => {
+  const { spawn, children } = fakeSpawn();
+  const monitor = new DiskMonitor({ platform: 'darwin', spawn, logger: quietLogger() });
+  const samples = [];
+  monitor.on('sample', (s) => samples.push(s.totalBps / (1024 * 1024)));
+  monitor.start();
+  const out = children[0].stdout;
+  out.write('              disk0 \n    KB/t  tps  MB/s \n   21.89   38 50.00 \n');
+  out.write('   16.00    3  1.00 \n');
+  // disk4 is attached: iostat reprints the device line, and the next report
+  // includes disk4's bytes since boot.
+  out.write('              disk0               disk4 \n    KB/t  tps  MB/s     KB/t  tps  MB/s \n');
+  out.write('   16.00    3  1.00    512.00 9000 4500.00 \n');
+  out.write('   16.00    3  1.00      4.00    2  0.25 \n');
+  // The same header reprinted (iostat does this periodically) skips nothing.
+  out.write('              disk0               disk4 \n    KB/t  tps  MB/s     KB/t  tps  MB/s \n');
+  out.write('   16.00    3  2.00      4.00    2  0.00 \n');
+  await delay(5);
+  monitor.stop();
+  assert.deepEqual(samples, [1, 1.25, 2]);
 });
 
 test('unsupported platforms emit nothing and log once', async () => {
