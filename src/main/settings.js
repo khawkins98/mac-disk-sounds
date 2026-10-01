@@ -51,14 +51,20 @@ export function mergeWithDefaults(stored) {
 
 /**
  * Write `data` as JSON to `file` atomically: write a temporary file next to
- * it, then rename it over the target, so a crash mid-write leaves either the
- * old file or the new one, never half of one.
+ * it, fsync it, then rename it over the target, so a crash or power cut
+ * mid-write leaves either the old file or the new one, never half of one.
  */
 export function writeJsonAtomicSync(file, data, fsImpl = fs) {
   fsImpl.mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
   try {
-    fsImpl.writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+    const fd = fsImpl.openSync(temp, 'w', 0o600);
+    try {
+      fsImpl.writeFileSync(fd, `${JSON.stringify(data, null, 2)}\n`);
+      fsImpl.fsyncSync(fd);
+    } finally {
+      fsImpl.closeSync(fd);
+    }
     fsImpl.renameSync(temp, file);
   } catch (error) {
     try {
@@ -70,13 +76,20 @@ export function writeJsonAtomicSync(file, data, fsImpl = fs) {
   }
 }
 
+/** Temp files writeJsonAtomicSync leaves behind if the app dies mid-write. */
+export function isOrphanTempFile(file, name) {
+  const base = path.basename(file);
+  return name.startsWith(`${base}.`) && name.endsWith('.tmp') && /^\d+$/.test(name.slice(base.length + 1, -4));
+}
+
 /**
  * Holds the current settings, persists them, and emits `change` with
  * (settings, changedKeys) whenever update() changes something.
  *
  * Writes are debounced: a burst of updates (a slider being dragged) becomes
  * one write `debounceMs` after the last of them. flush() writes any pending
- * change at once (call it before quitting).
+ * change at once (call it before quitting); a write that fails is retried
+ * `debounceMs` later.
  */
 export class SettingsStore extends EventEmitter {
   constructor({ file, debounceMs = 500, fs: fsImpl = fs, logger = console }) {
@@ -87,6 +100,7 @@ export class SettingsStore extends EventEmitter {
     this.logger = logger;
     this.timer = null;
     this.dirty = false;
+    this.failing = false;
     // True when there was no settings file yet (first run).
     this.isNew = false;
     this.settings = { ...DEFAULT_SETTINGS };
@@ -94,6 +108,7 @@ export class SettingsStore extends EventEmitter {
 
   /** Read the file. A missing or unreadable file means defaults. */
   load() {
+    this.#removeOrphanTempFiles();
     let text;
     try {
       text = this.fs.readFileSync(this.file, 'utf8');
@@ -104,7 +119,8 @@ export class SettingsStore extends EventEmitter {
       return this.get();
     }
     try {
-      this.settings = mergeWithDefaults(JSON.parse(text));
+      // Strip a UTF-8 byte order mark (an editor may add one).
+      this.settings = mergeWithDefaults(JSON.parse(text.replace(/^\uFEFF/, '')));
     } catch (error) {
       this.logger.warn('Settings file is not valid JSON; using defaults.', error.message);
       this.settings = { ...DEFAULT_SETTINGS };
@@ -126,9 +142,7 @@ export class SettingsStore extends EventEmitter {
     if (changed.length === 0) return changed;
     this.settings = { ...this.settings, ...clean };
     this.dirty = true;
-    clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.flush(), this.debounceMs);
-    this.timer.unref?.();
+    this.#schedule();
     this.emit('change', this.get(), changed);
     return changed;
   }
@@ -141,8 +155,35 @@ export class SettingsStore extends EventEmitter {
     try {
       writeJsonAtomicSync(this.file, this.settings, this.fs);
       this.dirty = false;
+      this.failing = false;
     } catch (error) {
-      this.logger.error('Cannot save settings.', error);
+      // Log the first failure of a run, then keep retrying quietly.
+      if (!this.failing) this.logger.error('Cannot save settings; will retry.', error);
+      this.failing = true;
+      this.#schedule();
+    }
+  }
+
+  #schedule() {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.flush(), this.debounceMs);
+    this.timer.unref?.();
+  }
+
+  #removeOrphanTempFiles() {
+    let names;
+    try {
+      names = this.fs.readdirSync(path.dirname(this.file));
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (!isOrphanTempFile(this.file, name)) continue;
+      try {
+        this.fs.rmSync(path.join(path.dirname(this.file), name), { force: true });
+      } catch {
+        // Harmless; try again next time.
+      }
     }
   }
 }

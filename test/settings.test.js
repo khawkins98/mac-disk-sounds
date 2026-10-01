@@ -7,6 +7,7 @@ import {
   DEFAULT_SETTINGS,
   SOUND_SETS,
   SettingsStore,
+  isOrphanTempFile,
   mergeWithDefaults,
   sanitizePatch,
   writeJsonAtomicSync
@@ -153,16 +154,27 @@ test('flush with nothing pending does not write', (t) => {
   assert.equal(fs.existsSync(file), false);
 });
 
-test('writeJsonAtomicSync replaces the file via a temp file and rename', (t) => {
+test('writeJsonAtomicSync writes and fsyncs a temp file, then renames it into place', (t) => {
   const dir = tempDir(t);
   const file = path.join(dir, 'settings.json');
   fs.writeFileSync(file, 'old');
   const ops = [];
+  const fds = new Map();
   const spyFs = {
     ...fs,
-    writeFileSync: (target, ...rest) => {
-      ops.push(['write', path.basename(target)]);
-      return fs.writeFileSync(target, ...rest);
+    openSync: (target, ...rest) => {
+      const fd = fs.openSync(target, ...rest);
+      fds.set(fd, path.basename(target));
+      ops.push(['open', path.basename(target)]);
+      return fd;
+    },
+    fsyncSync: (fd) => {
+      ops.push(['fsync', fds.get(fd)]);
+      return fs.fsyncSync(fd);
+    },
+    closeSync: (fd) => {
+      ops.push(['close', fds.get(fd)]);
+      return fs.closeSync(fd);
     },
     renameSync: (from, to) => {
       ops.push(['rename', path.basename(from), path.basename(to)]);
@@ -171,8 +183,28 @@ test('writeJsonAtomicSync replaces the file via a temp file and rename', (t) => 
   };
   writeJsonAtomicSync(file, { a: 1 }, spyFs);
   const temp = `settings.json.${process.pid}.tmp`;
-  assert.deepEqual(ops, [['write', temp], ['rename', temp, 'settings.json']]);
+  assert.deepEqual(ops, [['open', temp], ['fsync', temp], ['close', temp], ['rename', temp, 'settings.json']]);
   assert.deepEqual(readJson(file), { a: 1 });
+});
+
+test('load strips a UTF-8 byte order mark', (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, '\uFEFF{"soundSet": "ibm"}');
+  const store = new SettingsStore({ file, logger: quietLogger() });
+  assert.deepEqual(store.load(), { ...DEFAULT_SETTINGS, soundSet: 'ibm' });
+});
+
+test('load removes temp files left by a crash mid-write, and nothing else', (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, 'settings.json');
+  for (const name of ['settings.json', 'settings.json.123.tmp', 'settings.json.9.tmp', 'settings.json.bak', 'other.json.5.tmp', 'settings.json.x.tmp']) {
+    fs.writeFileSync(path.join(dir, name), '{}');
+  }
+  new SettingsStore({ file, logger: quietLogger() }).load();
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['other.json.5.tmp', 'settings.json', 'settings.json.bak', 'settings.json.x.tmp']);
+  assert.equal(isOrphanTempFile(file, 'settings.json.42.tmp'), true);
+  assert.equal(isOrphanTempFile(file, 'settings.json.tmp'), false);
 });
 
 test('a failed rename keeps the old file and removes the temp file', (t) => {
@@ -190,19 +222,30 @@ test('a failed rename keeps the old file and removes the temp file', (t) => {
   assert.deepEqual(fs.readdirSync(dir), ['settings.json']);
 });
 
-test('a store that cannot write logs the error and keeps the change pending', (t) => {
+test('a failed write is logged once and retried until it succeeds', async (t) => {
   const dir = tempDir(t);
+  const file = path.join(dir, 'settings.json');
   const logger = quietLogger();
-  const failingFs = {
+  let failuresLeft = 2;
+  const flakyFs = {
     ...fs,
-    renameSync: () => {
-      throw new Error('read-only');
+    renameSync: (from, to) => {
+      if (failuresLeft > 0) {
+        failuresLeft -= 1;
+        throw new Error('read-only');
+      }
+      return fs.renameSync(from, to);
     }
   };
-  const store = new SettingsStore({ file: path.join(dir, 'settings.json'), debounceMs: 10000, fs: failingFs, logger });
+  const store = new SettingsStore({ file, debounceMs: 10, fs: flakyFs, logger });
+  t.after(() => clearTimeout(store.timer));
   store.load();
   store.update({ enabled: false });
   assert.doesNotThrow(() => store.flush());
   assert.equal(store.dirty, true);
-  assert.equal(logger.calls.at(-1)[0], 'error');
+  assert.notEqual(store.timer, null, 'a retry is scheduled');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(store.dirty, false);
+  assert.equal(readJson(file).enabled, false);
+  assert.equal(logger.calls.filter(([level]) => level === 'error').length, 1);
 });
