@@ -51,7 +51,7 @@ async function createWindow() {
       spellcheck: false,
       backgroundThrottling: true
     },
-    icon: path.join(__dirname, 'icon', 'hdd-icon.jpg')
+    icon: path.join(__dirname, 'icon.iconset', 'icon_256x256.png')
   });
 
   await mainWindow.loadFile('index.html');
