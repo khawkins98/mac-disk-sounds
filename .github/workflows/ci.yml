@@ -33,6 +33,9 @@ jobs:
             node --check "$file"
           done
 
+      - name: Check paths in the electron-builder config
+        run: node scripts/check-build-config.mjs
+
       - name: Lint
         run: npm run lint
 
@@ -42,8 +45,10 @@ jobs:
       - name: Disk monitor smoke test
         run: node scripts/smoke-monitor.mjs
 
-      - name: Package (Linux, unpacked)
-        run: npx electron-builder --dir -l --publish never
+      # A real Linux target (not just --dir), so icon and packaging problems
+      # show up here rather than in the release build.
+      - name: Package (Linux AppImage)
+        run: npx electron-builder -l AppImage --publish never
 
   # Run the real disk monitor backend (iostat on macOS, typeperf on Windows)
   # for a few seconds and check the parsers get samples. Linux runs the same

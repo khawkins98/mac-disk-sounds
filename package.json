@@ -60,7 +60,7 @@
       ]
     },
     "linux": {
-      "icon": "icon.iconset/icon_256x256.png",
+      "icon": "build/icon.png",
       "target": [
         "AppImage",
         "deb",
