@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DiskMonitor } from './disk-monitor.js';
 import { ActivityModel } from './activity.js';
 import { SettingsStore, sanitizePatch } from './settings.js';
-import { createLoginItem, wasOpenedAtLogin } from './login-item.js';
+import { HIDDEN_ARG, createLoginItem, wasOpenedAtLogin } from './login-item.js';
 import { createTray } from './tray.js';
 
 // ES Module path resolution
@@ -388,9 +388,10 @@ function registerIpc() {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  // Launching the app again shows the settings window.
-  app.on('second-instance', () => {
-    if (app.isReady()) showSettingsWindow();
+  // Launching the app again shows the settings window, unless it is the
+  // login item starting while we already run.
+  app.on('second-instance', (_event, argv) => {
+    if (app.isReady() && !argv.includes(HIDDEN_ARG)) showSettingsWindow();
   });
 
   app.whenReady().then(() => {

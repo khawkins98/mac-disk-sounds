@@ -45,8 +45,8 @@ export class AudioEngine {
 
   /**
    * Chromium can start an AudioContext suspended until a user gesture.
-   * Electron normally allows autoplay (see autoplayPolicy in src/main/index.js), but
-   * if it does not, resume on the first click or key press.
+   * The audio window allows autoplay (autoplayPolicy in src/main/index.js),
+   * but if that ever fails, resume on the first click or key press.
    */
   resumeWhenAllowed() {
     if (this.context.state !== 'suspended') return;
