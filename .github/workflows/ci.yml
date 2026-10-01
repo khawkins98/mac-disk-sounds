@@ -29,7 +29,7 @@ jobs:
 
       - name: Check JavaScript syntax
         run: |
-          for file in src/main/*.js src/preload.cjs src/renderer/*.js; do
+          for file in src/main/*.js src/preload.cjs src/renderer/*.js scripts/*.mjs; do
             node --check "$file"
           done
 
@@ -39,5 +39,34 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Disk monitor smoke test
+        run: node scripts/smoke-monitor.mjs
+
       - name: Package (Linux, unpacked)
         run: npx electron-builder --dir -l --publish never
+
+  # Run the real disk monitor backend (iostat on macOS, typeperf on Windows)
+  # for a few seconds and check the parsers get samples. Linux runs the same
+  # script in the build job above.
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v7
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      # The monitor has no dependencies, so there is nothing to install.
+      - name: Disk monitor smoke test
+        run: node scripts/smoke-monitor.mjs
