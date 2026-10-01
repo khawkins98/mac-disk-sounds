@@ -114,7 +114,8 @@ export class AudioEngine {
 
   /**
    * Schedule one 300 ms click from `setName` at audio time `when`, with a
-   * 10 ms attack and release. Returns {start, end} in audio time.
+   * 10 ms attack and release. Returns {start, end, stop} with times in
+   * audio time; stop() cancels the click, scheduled or playing.
    */
   click(setName, when, volume) {
     const set = CLICK_SETS[setName] ?? CLICK_SETS.generic;
@@ -134,7 +135,17 @@ export class AudioEngine {
     source.connect(gain);
     source.onended = () => gain.disconnect();
     source.start(start, offset, CLICK_SECONDS);
-    return { start, end };
+    return {
+      start,
+      end,
+      stop: () => {
+        try {
+          source.stop();
+        } catch {
+          // Already stopped.
+        }
+      }
+    };
   }
 
   get modemPlaying() {

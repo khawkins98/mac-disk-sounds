@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DiskMonitor } from './disk-monitor.js';
 import { ActivityModel } from './activity.js';
@@ -34,7 +35,8 @@ function sendActivity(state) {
 
 function startMonitor() {
   if (monitor) return;
-  activity.reset(Date.now());
+  // DiskMonitor stamps samples with performance.now(); use the same clock.
+  activity.reset(performance.now());
   monitor = new DiskMonitor();
   monitor.on('sample', (sample) => {
     const changed = activity.update(sample);
@@ -63,13 +65,15 @@ function isTrustedSender(event) {
   }
 }
 
-function isAllowedExternalUrl(value) {
+// Returns the normalised URL if it may be opened, otherwise null.
+function allowedExternalUrl(value) {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && EXTERNAL_HOSTS.has(url.hostname) &&
+    const allowed = url.protocol === 'https:' && EXTERNAL_HOSTS.has(url.hostname) &&
       url.port === '' && url.username === '' && url.password === '';
+    return allowed ? url.href : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -100,6 +104,7 @@ async function createWindow() {
   // The page never navigates or opens windows; links go through openExternal.
   webContents.on('will-navigate', (event) => event.preventDefault());
   webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  webContents.on('will-attach-webview', (event) => event.preventDefault());
 
   // A reload (or the first load) starts from idle; resend the current state.
   webContents.on('did-finish-load', () => {
@@ -128,11 +133,12 @@ ipcMain.on('window-control', (event, command) => {
 
 ipcMain.on('open-external', (event, url) => {
   if (!isTrustedSender(event)) return;
-  if (!isAllowedExternalUrl(url)) {
+  const href = allowedExternalUrl(url);
+  if (!href) {
     console.warn('Refusing to open external URL:', url);
     return;
   }
-  shell.openExternal(url);
+  shell.openExternal(href);
 });
 
 if (!app.requestSingleInstanceLock()) {
@@ -144,7 +150,11 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.focus();
   });
 
-  app.whenReady().then(createWindow);
+  app.whenReady().then(() => {
+    // The page needs no permissions (audio output is not one).
+    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    return createWindow();
+  });
 
   app.on('window-all-closed', () => {
     stopMonitor();

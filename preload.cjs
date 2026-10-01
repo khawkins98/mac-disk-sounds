@@ -6,10 +6,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('diskSounds', {
   /**
-   * Subscribe to disk activity changes. The callback receives
-   * {active, level, readBps, writeBps, totalBps}; it is called only when the
-   * active/idle state or the 0-5 level changes. Returns an unsubscribe
-   * function.
+   * Subscribe to disk activity. The callback receives
+   * {active, level, readBps, writeBps, totalBps}. It is called when the
+   * active/idle state or the 0-5 level changes, and while active about once
+   * a second with fresh rates. Returns an unsubscribe function.
    */
   onActivity(callback) {
     if (typeof callback !== 'function') throw new TypeError('onActivity expects a function');

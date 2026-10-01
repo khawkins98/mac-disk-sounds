@@ -64,7 +64,7 @@ test('one big burst goes active immediately', () => {
 });
 
 test('needs M consecutive samples below the threshold to go idle', () => {
-  const model = startedModel();
+  const model = startedModel({ refreshMs: Infinity });
   feed(model, [100 * MIB]);
   assert.equal(model.state.active, true);
   // Two quiet seconds, a busy one, then three quiet ones.
@@ -79,8 +79,8 @@ test('needs M consecutive samples below the threshold to go idle', () => {
   ]);
 });
 
-test('reports only state or level changes', () => {
-  const model = startedModel();
+test('without refreshes, reports only state or level changes', () => {
+  const model = startedModel({ refreshMs: Infinity });
   const changes = feed(model, [100 * MIB, 120 * MIB, 90 * MIB, 2 * MIB, 2.5 * MIB, 100 * MIB]);
   assert.deepEqual(changes.map((c) => c && c.level), [5, null, null, 3, null, 5]);
 });
@@ -121,4 +121,54 @@ test('sums reads and writes against the threshold', () => {
   const change = model.update({ readBps: 40 * KIB, writeBps: 40 * KIB, at: 5000 });
   assert.equal(change.active, true);
   assert.equal(change.totalBps, 80 * KIB);
+});
+
+test('while active, refreshes the rates about once a second', () => {
+  const model = startedModel();
+  const at = (t) => DEFAULTS.warmupMs + t;
+  const send = (bps, t) => model.update({ readBps: 0, writeBps: bps, at: at(t) });
+  assert.equal(send(100 * MIB, 0).level, 5);
+  // Same level 400 ms later: too soon for a refresh.
+  assert.equal(send(110 * MIB, 400), null);
+  // A second after the last report: refreshed with the new rate.
+  const refreshed = send(120 * MIB, 1000);
+  assert.deepEqual(refreshed, { active: true, level: 5, readBps: 0, writeBps: 120 * MIB, totalBps: 120 * MIB });
+  // Jitter: 950 ms later still refreshes.
+  assert.equal(send(130 * MIB, 1950).totalBps, 130 * MIB);
+});
+
+test('reports going idle once and is then silent', () => {
+  const model = startedModel();
+  const changes = feed(model, [100 * MIB, 0, 0, 0, 0, 0]);
+  assert.deepEqual(changes.map((c) => c && [c.active, c.level, c.totalBps]), [
+    [true, 5, 100 * MIB],
+    [true, 1, 0],
+    [true, 1, 0], // refresh while winding down
+    [false, 0, 0],
+    null,
+    null
+  ]);
+});
+
+test('a backwards clock jump after warm-up does not mute it', () => {
+  const model = startedModel();
+  assert.equal(model.update({ readBps: 100 * MIB, writeBps: 0, at: 10000 }).active, true);
+  // The clock goes back an hour.
+  const back = 10000 - 3600 * 1000;
+  const after = model.update({ readBps: 100 * MIB, writeBps: 0, at: back });
+  assert.ok(after, 'still reports after the jump');
+  assert.equal(after.active, true);
+  feed(model, [0, 0, 0], { startAt: back + 1000 });
+  assert.equal(model.state.active, false);
+  assert.equal(model.update({ readBps: 100 * MIB, writeBps: 0, at: back + 4000 }).active, true);
+});
+
+test('a backwards clock jump during warm-up restarts the window instead of stalling', () => {
+  const model = new ActivityModel();
+  model.reset(1_000_000);
+  assert.equal(model.update({ readBps: 100 * MIB, writeBps: 0, at: 1_001_000 }), null);
+  // Back an hour: the warm-up restarts from here rather than lasting an hour.
+  assert.equal(model.update({ readBps: 100 * MIB, writeBps: 0, at: 1000 }), null);
+  assert.equal(model.update({ readBps: 100 * MIB, writeBps: 0, at: 4000 }), null);
+  assert.equal(model.update({ readBps: 100 * MIB, writeBps: 0, at: 6000 }).active, true);
 });

@@ -1,5 +1,6 @@
 // Turns raw disk throughput samples into "is the disk busy, and how busy"
-// for the renderer. Pure: no timers, no Electron, time comes from samples.
+// for the renderer. Pure: no timers, no Electron, time comes from samples
+// (a monotonic clock in milliseconds; see DiskMonitor).
 
 export const DEFAULTS = Object.freeze({
   // Combined read+write throughput below which the disk counts as idle.
@@ -15,7 +16,11 @@ export const DEFAULTS = Object.freeze({
   maxBps: 256 * 1024 * 1024,
   // Samples this soon after start are ignored, so the app's own startup I/O
   // (loading and decoding its sound files) does not click.
-  warmupMs: 5000
+  warmupMs: 5000,
+  // While active, also report the current rates at most this often even if
+  // nothing else changed, so the speed readout stays live. Samples arrive
+  // about a second apart; 900 ms lets every one through despite jitter.
+  refreshMs: 900
 });
 
 export const MAX_LEVEL = 5;
@@ -33,11 +38,12 @@ export function levelForBps(bps, { thresholdBps = DEFAULTS.thresholdBps, maxBps 
 }
 
 /**
- * Feed it samples with update(); it returns the new state when the
- * active/idle state or the level bucket changes, and null otherwise.
+ * Feed it samples with update(). It returns the current state when the
+ * active/idle state or the level bucket changes, when going idle, and, while
+ * active, at most every `refreshMs` with fresh rates; otherwise null.
  *
  * State: {active, level, readBps, writeBps, totalBps}. level is 0 when idle
- * and 1..5 when active. The rates are from the sample that caused the change;
+ * and 1..5 when active. The rates are from the latest sample;
  * readBps/writeBps are null when the platform cannot split reads from writes
  * (macOS).
  */
@@ -50,8 +56,10 @@ export class ActivityModel {
   /** Start (or restart) the warm-up window at time `at` (ms). */
   reset(at) {
     this.startedAt = at;
+    this.warmedUp = false;
     this.above = 0;
     this.below = 0;
+    this.lastReportAt = null;
     this.state = { active: false, level: 0, readBps: 0, writeBps: 0, totalBps: 0 };
   }
 
@@ -61,8 +69,13 @@ export class ActivityModel {
    */
   update(sample) {
     const o = this.options;
-    if (this.startedAt === null) this.startedAt = sample.at;
-    if (sample.at - this.startedAt < o.warmupMs) return null;
+    if (!this.warmedUp) {
+      // A clock that went backwards restarts the window rather than
+      // stretching it; once warmed up this is never checked again.
+      if (this.startedAt === null || sample.at < this.startedAt) this.startedAt = sample.at;
+      if (sample.at - this.startedAt < o.warmupMs) return null;
+      this.warmedUp = true;
+    }
 
     const total = sample.totalBps ?? (sample.readBps ?? 0) + (sample.writeBps ?? 0);
     const busy = total >= o.thresholdBps;
@@ -85,7 +98,13 @@ export class ActivityModel {
     // While active but briefly below the threshold, keep clicking gently.
     const level = active ? Math.max(1, levelForBps(total, o)) : 0;
 
-    if (active === this.state.active && level === this.state.level) return null;
+    const changed = active !== this.state.active || level !== this.state.level;
+    const elapsed = this.lastReportAt === null ? Infinity : sample.at - this.lastReportAt;
+    // A backwards clock step (elapsed < 0) also refreshes, then resyncs.
+    const refresh = active && (elapsed >= o.refreshMs || elapsed < 0);
+    if (!changed && !refresh) return null;
+
+    this.lastReportAt = sample.at;
     this.state = { active, level, readBps: sample.readBps, writeBps: sample.writeBps, totalBps: total };
     return this.state;
   }

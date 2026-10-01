@@ -66,6 +66,9 @@ backgroundVolumeSlider.addEventListener('input', () => {
 
 soundSetSelect.addEventListener('change', () => {
   currentSoundSet = soundSetSelect.value;
+  // Drop clicks already scheduled from the old set and carry on with the new.
+  cancelScheduledClicks();
+  scheduleClicks();
 });
 
 // Activity indicators. One function owns the dots; it stands aside while the
@@ -124,15 +127,22 @@ const renderDots = () => {
   if (activity.active || scheduledClicks.length > 0) startRendering();
 };
 
+function cancelScheduledClicks() {
+  scheduledClicks.forEach((click) => click.stop());
+  scheduledClicks = [];
+  nextClickAt = 0;
+}
+
 function startRendering() {
   if (renderFrame === null) renderFrame = requestAnimationFrame(renderDots);
 }
 
+// Called on every state or level change and, while active, about once a
+// second with fresh rates for the readout.
 const onActivity = (state) => {
   activity = state;
   if (state.active) {
-    // While winding down (active but quiet) keep the last busy reading.
-    if (state.totalBps > 0) diskSpeed.textContent = describeSpeed(state);
+    diskSpeed.textContent = describeSpeed(state);
     if (schedulerTimer === null) {
       schedulerTimer = setInterval(scheduleClicks, SCHEDULER_INTERVAL_MS);
     }
